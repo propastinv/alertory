@@ -50,6 +50,17 @@ CREATE TABLE IF NOT EXISTS alert_events (
 		`
 CREATE INDEX IF NOT EXISTS idx_alert_events_fingerprint 
 ON alert_events(fingerprint);
+
+CREATE TABLE IF NOT EXISTS providers (
+    id          BIGSERIAL PRIMARY KEY,
+    provider    TEXT NOT NULL,
+    key         TEXT NOT NULL,
+    value       TEXT NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_providers_provider_key
+ON providers(provider, key);
 `,
 	}
 
