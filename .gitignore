@@ -1,4 +1,4 @@
 docker-compose.yaml
 .env
 
-workflows
+/workflows
