@@ -1,0 +1,63 @@
+name: Build and Push alertory
+
+permissions:
+  packages: write
+  contents: read
+
+on:
+  push:
+    tags:
+      - '*'
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set version from Git tag
+      id: get_version
+      run: |
+        # берём имя тега
+        echo "VERSION=${GITHUB_REF##*/}" >> $GITHUB_ENV
+        echo "version=${GITHUB_REF##*/}" >> $GITHUB_OUTPUT
+
+    - name: Check if image exists
+      id: check_image
+      run: |
+        if docker manifest inspect ghcr.io/${{ github.repository }}/alertory:${{ env.VERSION }} > /dev/null 2>&1; then
+          echo "SKIP=true" >> $GITHUB_ENV
+        else
+          echo "SKIP=false" >> $GITHUB_ENV
+        fi
+
+    - name: Stop if image already exists
+      if: env.SKIP == 'true'
+      run: echo "Image ghcr.io/${{ github.repository }}/alertory:${{ env.VERSION }} already exists. Skipping build."
+
+    - name: Log in to GitHub Container Registry
+      if: env.SKIP != 'true'
+      uses: docker/login-action@v2
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Build Docker Image
+      if: env.SKIP != 'true'
+      run: |
+        docker build -t ghcr.io/${{ github.repository }}/alertory:${{ env.VERSION }} .
+
+    - name: Push Docker Image
+      if: env.SKIP != 'true'
+      run: |
+        docker push ghcr.io/${{ github.repository }}/alertory:${{ env.VERSION }}
+
+    - name: Tag latest
+      if: env.SKIP != 'true'
+      run: |
+        docker tag ghcr.io/${{ github.repository }}/alertory:${{ env.VERSION }} ghcr.io/${{ github.repository }}/alertory:latest
+        docker push ghcr.io/${{ github.repository }}/alertory:latest
