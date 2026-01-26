@@ -12,11 +12,12 @@ import (
 
 	"github.com/propastinv/alertory/internal/db"
 	"github.com/propastinv/alertory/internal/models"
+	"github.com/propastinv/alertory/internal/workflows"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func AlertsHandler(pool *pgxpool.Pool) http.Handler {
+func AlertsHandler(pool *pgxpool.Pool, rules []workflows.WorkflowRule) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload models.WebhookPayload
 
@@ -31,7 +32,12 @@ func AlertsHandler(pool *pgxpool.Pool) http.Handler {
 		for _, alert := range payload.Alerts {
 			alertname := alert.Labels["alertname"]
 
-			err := db.UpsertAlert(ctx, pool, db.AlertUpsert{
+			existingMeta, err := db.GetActiveAlertMeta(ctx, pool, alert.Fingerprint)
+			if err != nil {
+				log.Printf("failed to load alert meta: %v", err)
+			}
+
+			upsert := db.AlertUpsert{
 				Fingerprint: alert.Fingerprint,
 				Alertname:   alertname,
 				Status:      alert.Status,
@@ -40,19 +46,24 @@ func AlertsHandler(pool *pgxpool.Pool) http.Handler {
 				Labels:      alert.Labels,
 				Annotations: alert.Annotations,
 				Payload:     alert,
-			})
+				Meta:        existingMeta,
+			}
 
-			if err != nil {
+			upsert = workflows.ProcessAlert(ctx, upsert, rules, pool)
+
+			if err := db.UpsertAlert(ctx, pool, upsert); err != nil {
 				log.Printf("upsert alert failed: %v", err)
 				http.Error(w, "db error", 500)
 				return
 			}
+
 		}
 
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 }
+
 
 func SlackOAuthCallback(pool *pgxpool.Pool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -105,7 +116,7 @@ func SlackOAuthCallback(pool *pgxpool.Pool) http.Handler {
 			return
 		}
 
-		if err := db.UpsertProvider(pool, "slack", "access_token", result.AccessToken); err != nil {
+		if err := db.UpsertProviderSetting(pool, "slack", "access_token", result.AccessToken); err != nil {
 			http.Error(w, "failed to save token", http.StatusInternalServerError)
 			return
 		}

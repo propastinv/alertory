@@ -57,3 +57,31 @@ DO UPDATE SET
 
 	return err
 }
+
+func GetActiveAlertMeta(ctx context.Context, db *pgxpool.Pool, fingerprint string) (map[string]any, error) {
+	var metaJSON *string
+
+	err := db.QueryRow(ctx, `
+		SELECT meta
+		FROM active_alerts
+		WHERE fingerprint = $1
+	`, fingerprint).Scan(&metaJSON)
+
+	if err != nil {
+		if err.Error() == "no rows in result set" {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	if metaJSON == nil || *metaJSON == "" {
+		return nil, nil
+	}
+
+	var meta map[string]any
+	if err := json.Unmarshal([]byte(*metaJSON), &meta); err != nil {
+		return nil, err
+	}
+
+	return meta, nil
+}

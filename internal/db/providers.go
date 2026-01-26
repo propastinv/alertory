@@ -6,7 +6,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func UpsertProvider(pool *pgxpool.Pool, provider, key, value string) error {
+func UpsertProviderSetting(pool *pgxpool.Pool, provider, key, value string) error {
 	_, err := pool.Exec(context.Background(), `
 	INSERT INTO providers (provider, key, value, updated_at)
 	VALUES ($1, $2, $3, now())
@@ -16,7 +16,7 @@ func UpsertProvider(pool *pgxpool.Pool, provider, key, value string) error {
 	return err
 }
 
-func GetProvider(pool *pgxpool.Pool, provider, key string) string {
+func GetProviderSetting(pool *pgxpool.Pool, provider, key string) string {
 	var value string
 	err := pool.QueryRow(context.Background(),
 		`SELECT value FROM providers WHERE provider=$1 AND key=$2`,
