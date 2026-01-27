@@ -48,6 +48,7 @@ VALUES (
 ON CONFLICT (fingerprint)
 DO UPDATE SET
   status = EXCLUDED.status,
+  starts_at = EXCLUDED.starts_at,
   ends_at = EXCLUDED.ends_at,
   meta = EXCLUDED.meta,
   last_seen = now(),
@@ -84,4 +85,93 @@ func GetActiveAlertMeta(ctx context.Context, db *pgxpool.Pool, fingerprint strin
 	}
 
 	return meta, nil
+}
+func IsNewAlert(ctx context.Context, db *pgxpool.Pool, fingerprint string, startsAt time.Time) (bool, error) {
+	var dbStartsAt *time.Time
+
+	err := db.QueryRow(ctx, `
+		SELECT starts_at
+		FROM active_alerts
+		WHERE fingerprint = $1
+	`, fingerprint).Scan(&dbStartsAt)
+
+	if err != nil {
+		if err.Error() == "no rows in result set" {
+			return true, nil
+		}
+		return false, err
+	}
+
+	if dbStartsAt == nil {
+		return true, nil
+	}
+
+	return !dbStartsAt.Equal(startsAt), nil
+}
+func GetAlert(ctx context.Context, db *pgxpool.Pool, fingerprint string) (*AlertUpsert, error) {
+	var alertname, status string
+	var startsAt time.Time
+	var endsAt *time.Time
+	var labelsJSON, annotationsJSON *string
+
+	err := db.QueryRow(ctx, `
+		SELECT alertname, status, starts_at, ends_at, labels, annotations
+		FROM active_alerts
+		WHERE fingerprint = $1
+	`, fingerprint).Scan(&alertname, &status, &startsAt, &endsAt, &labelsJSON, &annotationsJSON)
+
+	if err != nil {
+		if err.Error() == "no rows in result set" {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var labels map[string]string
+	var annotations map[string]string
+
+	if labelsJSON != nil {
+		json.Unmarshal([]byte(*labelsJSON), &labels)
+	}
+	if annotationsJSON != nil {
+		json.Unmarshal([]byte(*annotationsJSON), &annotations)
+	}
+
+	return &AlertUpsert{
+		Fingerprint: fingerprint,
+		Alertname:   alertname,
+		Status:      status,
+		StartsAt:    startsAt,
+		EndsAt:      endsAt,
+		Labels:      labels,
+		Annotations: annotations,
+	}, nil
+}
+
+func GetAnnotations(ctx context.Context, db *pgxpool.Pool, fingerprint string) (map[string]string, error) {
+	var annotationsJSON *string
+
+	err := db.QueryRow(ctx, `
+		SELECT annotations
+		FROM active_alerts
+		WHERE fingerprint = $1
+	`, fingerprint).Scan(&annotationsJSON)
+
+	if err != nil {
+		if err.Error() == "no rows in result set" {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	if annotationsJSON == nil {
+		return nil, nil
+	}
+
+	var annotations map[string]string
+	if err := json.Unmarshal([]byte(*annotationsJSON), &annotations); err != nil {
+		return nil, err
+	}
+
+	return annotations, nil
 }

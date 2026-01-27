@@ -26,7 +26,7 @@ func AlertsHandler(pool *pgxpool.Pool, rules []workflows.WorkflowRule) http.Hand
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
 
 		for _, alert := range payload.Alerts {
@@ -35,6 +35,11 @@ func AlertsHandler(pool *pgxpool.Pool, rules []workflows.WorkflowRule) http.Hand
 			existingMeta, err := db.GetActiveAlertMeta(ctx, pool, alert.Fingerprint)
 			if err != nil {
 				log.Printf("failed to load alert meta: %v", err)
+			}
+
+			isNew, err := db.IsNewAlert(ctx, pool, alert.Fingerprint, alert.StartsAt)
+			if err != nil {
+				log.Printf("error checking if alert is new: %v", err)
 			}
 
 			upsert := db.AlertUpsert{
@@ -49,7 +54,7 @@ func AlertsHandler(pool *pgxpool.Pool, rules []workflows.WorkflowRule) http.Hand
 				Meta:        existingMeta,
 			}
 
-			upsert = workflows.ProcessAlert(ctx, upsert, rules, pool)
+			upsert = workflows.ProcessAlert(ctx, upsert, rules, pool, isNew)
 
 			if err := db.UpsertAlert(ctx, pool, upsert); err != nil {
 				log.Printf("upsert alert failed: %v", err)
