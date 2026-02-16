@@ -43,7 +43,7 @@ func AlertsHandler(pool *pgxpool.Pool, rules []workflows.WorkflowRule, token str
 				log.Printf("failed to load alert meta: %v", err)
 			}
 
-			isNew, err := db.IsNewAlert(ctx, pool, alert.Fingerprint, alert.StartsAt)
+			isNew, err := db.IsNewAlert(ctx, pool, alert.Fingerprint, *alert.StartsAt)
 			if err != nil {
 				log.Printf("error checking if alert is new: %v", err)
 			}
@@ -52,7 +52,7 @@ func AlertsHandler(pool *pgxpool.Pool, rules []workflows.WorkflowRule, token str
 				Fingerprint: alert.Fingerprint,
 				Alertname:   alertname,
 				Status:      alert.Status,
-				StartsAt:    alert.StartsAt,
+				StartsAt:    *alert.StartsAt,
 				EndsAt:      alert.EndsAt,
 				Labels:      alert.Labels,
 				Annotations: alert.Annotations,
