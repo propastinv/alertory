@@ -26,7 +26,6 @@ func AlertsHandler(pool *pgxpool.Pool, rules []workflows.WorkflowRule, token str
 			return
 		}
 
-		// Парсим стандартный Alertmanager payload
 		var payload models.WebhookPayload
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			http.Error(w, "invalid json", 400)
@@ -35,11 +34,6 @@ func AlertsHandler(pool *pgxpool.Pool, rules []workflows.WorkflowRule, token str
 
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
-
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			http.Error(w, "invalid json", 400)
-			return
-		}
 
 		for _, alert := range payload.Alerts {
 			alertname := alert.Labels["alertname"]
