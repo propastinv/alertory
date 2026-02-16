@@ -3,12 +3,12 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
-	"time"
+	"net/url"
 	"os"
-	"fmt"
-    "net/url"
+	"time"
 
 	"github.com/propastinv/alertory/internal/db"
 	"github.com/propastinv/alertory/internal/models"
@@ -17,10 +17,17 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func AlertsHandler(pool *pgxpool.Pool, rules []workflows.WorkflowRule) http.Handler {
+func AlertsHandler(pool *pgxpool.Pool, rules []workflows.WorkflowRule, token string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var payload models.WebhookPayload
+		authHeader := r.Header.Get("Authorization")
+		expected := "Bearer " + token
+		if authHeader != expected {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 
+		// Парсим стандартный Alertmanager payload
+		var payload models.WebhookPayload
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			http.Error(w, "invalid json", 400)
 			return
@@ -28,6 +35,11 @@ func AlertsHandler(pool *pgxpool.Pool, rules []workflows.WorkflowRule) http.Hand
 
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
+
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "invalid json", 400)
+			return
+		}
 
 		for _, alert := range payload.Alerts {
 			alertname := alert.Labels["alertname"]
@@ -69,7 +81,6 @@ func AlertsHandler(pool *pgxpool.Pool, rules []workflows.WorkflowRule) http.Hand
 	})
 }
 
-
 func SlackOAuthCallback(pool *pgxpool.Pool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		code := r.URL.Query().Get("code")
@@ -81,14 +92,14 @@ func SlackOAuthCallback(pool *pgxpool.Pool) http.Handler {
 		clientID := os.Getenv("SLACK_CLIENT_ID")
 		clientSecret := os.Getenv("SLACK_CLIENT_SECRET")
 		if clientID == "" || clientSecret == "" {
-		    http.Error(w, "Slack client_id or client_secret is not set", http.StatusInternalServerError)
-		    return
+			http.Error(w, "Slack client_id or client_secret is not set", http.StatusInternalServerError)
+			return
 		}
 		appURL := os.Getenv("APP_URL")
 		if appURL == "" {
-		    log.Println("APP_URL is not set")
-		    http.Error(w, "APP_URL is not set", http.StatusInternalServerError)
-		    return
+			log.Println("APP_URL is not set")
+			http.Error(w, "APP_URL is not set", http.StatusInternalServerError)
+			return
 		}
 
 		redirectURI := fmt.Sprintf("%s/providers/oauth2/slack", appURL)
