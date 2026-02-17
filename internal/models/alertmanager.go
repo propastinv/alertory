@@ -17,12 +17,12 @@ type WebhookPayload struct {
 
 type Alert struct {
 	Status      string     `json:"status"`
-	Fingerprint string     `json:"fingerprint"`
-	StartsAt    *time.Time `json:"startsAt"`
-	EndsAt      *time.Time `json:"endsAt"`
+	Fingerprint string     `json:"fingerprint,omitempty"`
+	StartsAt    *time.Time `json:"startsAt,omitempty"`
+	EndsAt      *time.Time `json:"endsAt,omitempty"`
 
 	Labels      map[string]string `json:"labels"`
 	Annotations map[string]string `json:"annotations"`
 
-	GeneratorURL string `json:"generatorURL,omitempty"` // необязательное поле
+	GeneratorURL string `json:"generatorURL,omitempty"`
 }
