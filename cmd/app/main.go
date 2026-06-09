@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/propastinv/alertory/internal/db"
 	httpapi "github.com/propastinv/alertory/internal/http"
@@ -20,6 +21,19 @@ func main() {
 	defer pool.Close()
 
 	db.AutoMigrate(context.Background(), pool)
+
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			active, events, err := db.DeleteOldAlerts(context.Background(), pool, 7*24*time.Hour)
+			if err != nil {
+				log.Printf("cleanup error: %v", err)
+			} else {
+				log.Printf("cleanup: removed %d active_alerts, %d alert_events", active, events)
+			}
+		}
+	}()
 
 	handler := httpapi.NewServer(pool)
 

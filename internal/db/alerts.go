@@ -148,6 +148,22 @@ func GetAlert(ctx context.Context, db *pgxpool.Pool, fingerprint string) (*Alert
 	}, nil
 }
 
+func DeleteOldAlerts(ctx context.Context, db *pgxpool.Pool, olderThan time.Duration) (int64, int64, error) {
+	cutoff := time.Now().Add(-olderThan)
+
+	res1, err := db.Exec(ctx, `DELETE FROM active_alerts WHERE last_seen < $1`, cutoff)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	res2, err := db.Exec(ctx, `DELETE FROM alert_events WHERE received_at < $1`, cutoff)
+	if err != nil {
+		return res1.RowsAffected(), 0, err
+	}
+
+	return res1.RowsAffected(), res2.RowsAffected(), nil
+}
+
 func GetAnnotations(ctx context.Context, db *pgxpool.Pool, fingerprint string) (map[string]string, error) {
 	var annotationsJSON *string
 
