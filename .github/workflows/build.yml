@@ -51,15 +51,15 @@ jobs:
     - name: Build Docker Image
       if: env.SKIP != 'true'
       run: |
-        docker build -t ghcr.io/${{ github.repository }}/alertory:${{ env.VERSION }} .
+        docker build -t ghcr.io/${{ github.repository }}:${{ env.VERSION }} .
 
     - name: Push Docker Image
       if: env.SKIP != 'true'
       run: |
-        docker push ghcr.io/${{ github.repository }}/alertory:${{ env.VERSION }}
+        docker push ghcr.io/${{ github.repository }}:${{ env.VERSION }}
 
     - name: Tag latest
       if: env.SKIP != 'true'
       run: |
-        docker tag ghcr.io/${{ github.repository }}/alertory:${{ env.VERSION }} ghcr.io/${{ github.repository }}/alertory:latest
-        docker push ghcr.io/${{ github.repository }}/alertory:latest
+        docker tag ghcr.io/${{ github.repository }}:${{ env.VERSION }} ghcr.io/${{ github.repository }}:latest
+        docker push ghcr.io/${{ github.repository }}:latest
