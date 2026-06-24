@@ -35,6 +35,9 @@ func AlertsHandler(pool *pgxpool.Pool, rules []workflows.WorkflowRule, token str
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
 
+		var upserts []db.AlertUpsert
+		var allPendings []workflows.SlackPending
+
 		for _, alert := range payload.Alerts {
 			alertname := alert.Labels["alertname"]
 
@@ -60,14 +63,21 @@ func AlertsHandler(pool *pgxpool.Pool, rules []workflows.WorkflowRule, token str
 				Meta:        existingMeta,
 			}
 
-			upsert = workflows.ProcessAlert(ctx, upsert, rules, pool, isNew)
+			var pendings []workflows.SlackPending
+			upsert, pendings = workflows.ProcessAlert(ctx, upsert, rules, pool, isNew)
+			allPendings = append(allPendings, pendings...)
+			upserts = append(upserts, upsert)
+		}
 
+		// Send all firing alerts as one Slack message per channel.
+		workflows.SendBatchedSlack(pool, allPendings)
+
+		for _, upsert := range upserts {
 			if err := db.UpsertAlert(ctx, pool, upsert); err != nil {
 				log.Printf("upsert alert failed: %v", err)
 				http.Error(w, "db error", 500)
 				return
 			}
-
 		}
 
 		w.WriteHeader(http.StatusOK)

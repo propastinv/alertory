@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"text/template"
 	"time"
 
@@ -74,6 +75,15 @@ type SlackMessage struct {
 type SlackPostResult struct {
 	Channel string `json:"channel"`
 	TS      string `json:"ts"`
+}
+
+// SlackPending holds a rendered Slack message waiting to be batched and sent.
+type SlackPending struct {
+	Channel      string
+	Text         string
+	Attachments  []SlackAttachment
+	WorkflowMeta map[string]any // points into alert.Meta — updated in-place after send
+	StartsAt     string
 }
 
 func (r WorkflowRule) Matches(alert db.AlertUpsert) bool {
@@ -198,7 +208,9 @@ func renderAttachment(a SlackAttachment, alert db.AlertUpsert) SlackAttachment {
 	return ra
 }
 
-func ProcessAlert(ctx context.Context, alert db.AlertUpsert, rules []WorkflowRule, pool *pgxpool.Pool, isNew bool) db.AlertUpsert {
+func ProcessAlert(ctx context.Context, alert db.AlertUpsert, rules []WorkflowRule, pool *pgxpool.Pool, isNew bool) (db.AlertUpsert, []SlackPending) {
+	var pendings []SlackPending
+
 	for _, rule := range rules {
 		if !rule.Matches(alert) {
 			continue
@@ -256,26 +268,22 @@ func ProcessAlert(ctx context.Context, alert db.AlertUpsert, rules []WorkflowRul
 				}
 
 				var text string
-			if action.Message != "" {
-				t, err := renderTemplate(action.Message, alert)
-				if err != nil {
-					log.Printf("template error: %v", err)
-					continue
+				if action.Message != "" {
+					t, err := renderTemplate(action.Message, alert)
+					if err != nil {
+						log.Printf("template error: %v", err)
+						continue
+					}
+					text = t
 				}
-				text = t
-			}
 
-			slackPayload, err := sendSlackMessage(pool, action.Channel, text, attachments)
-			if err != nil {
-				log.Printf("failed to send Slack message: %v", err)
-				continue
-			}
-
-			workflowMeta["slack"] = map[string]any{
-				"channel":  slackPayload.Channel,
-				"ts":       slackPayload.TS,
-				"startsAt": alert.StartsAt.Format(time.RFC3339),
-			}
+				pendings = append(pendings, SlackPending{
+					Channel:      action.Channel,
+					Text:         text,
+					Attachments:  attachments,
+					WorkflowMeta: workflowMeta,
+					StartsAt:     alert.StartsAt.Format(time.RFC3339),
+				})
 
 			case "resolved":
 				if slackMeta != nil {
@@ -324,7 +332,51 @@ func ProcessAlert(ctx context.Context, alert db.AlertUpsert, rules []WorkflowRul
 		}
 	}
 
-	return alert
+	return alert, pendings
+}
+
+// SendBatchedSlack groups pending Slack sends by channel and sends one message per channel.
+// WorkflowMeta in each pending is updated in-place with the resulting ts.
+func SendBatchedSlack(pool *pgxpool.Pool, pendings []SlackPending) {
+	if len(pendings) == 0 {
+		return
+	}
+
+	type group struct {
+		texts       []string
+		attachments []SlackAttachment
+		items       []SlackPending
+	}
+	byChannel := make(map[string]*group)
+
+	for _, p := range pendings {
+		g := byChannel[p.Channel]
+		if g == nil {
+			g = &group{}
+			byChannel[p.Channel] = g
+		}
+		if p.Text != "" {
+			g.texts = append(g.texts, p.Text)
+		}
+		g.attachments = append(g.attachments, p.Attachments...)
+		g.items = append(g.items, p)
+	}
+
+	for channel, g := range byChannel {
+		combinedText := strings.Join(g.texts, "\n")
+		result, err := sendSlackMessage(pool, channel, combinedText, g.attachments)
+		if err != nil {
+			log.Printf("failed to send batched Slack message to %s: %v", channel, err)
+			continue
+		}
+		for _, p := range g.items {
+			p.WorkflowMeta["slack"] = map[string]any{
+				"channel":  result.Channel,
+				"ts":       result.TS,
+				"startsAt": p.StartsAt,
+			}
+		}
+	}
 }
 
 func sendSlackMessage(pool *pgxpool.Pool, channel, text string, attachments []SlackAttachment) (*SlackPostResult, error) {
