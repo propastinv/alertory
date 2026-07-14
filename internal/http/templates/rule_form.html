@@ -1,0 +1,62 @@
+{{define "content"}}
+<h1 class="text-xl font-semibold mb-6">{{.Submit}}</h1>
+
+<form method="post" action="{{.FormAction}}" class="bg-white rounded-lg shadow-sm border border-slate-200 p-6 space-y-5 max-w-2xl">
+  <div>
+    <label class="block text-sm font-medium mb-1">Name</label>
+    <input name="name" value="{{.Name}}" required
+           class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
+  </div>
+
+  <div>
+    <label class="block text-sm font-medium mb-1">Slack channel ID</label>
+    <input name="channel" value="{{.Channel}}" required placeholder="C0123456 or U0123456"
+           class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
+  </div>
+
+  <div>
+    <label class="block text-sm font-medium mb-1">Team</label>
+    <input name="team" value="{{.Team}}" placeholder="e.g. Infra"
+           class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
+    <p class="text-xs text-slate-400 mt-1">Shown as a fixed "Team" field on every Slack message from this rule.</p>
+  </div>
+
+  <div>
+    <label class="block text-sm font-medium mb-1">Target label</label>
+    <input name="target_label" value="{{.TargetLabel}}" placeholder="e.g. login, instance, host"
+           class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
+    <p class="text-xs text-slate-400 mt-1">Which alert label identifies the affected target; shown as "Target" in Slack.</p>
+  </div>
+
+  <div>
+    <label class="block text-sm font-medium mb-1">Match labels</label>
+    <textarea name="match_labels" rows="3" placeholder="namespace=external-monitoring&#10;job=health"
+              class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-slate-400">{{.MatchLabels}}</textarea>
+    <p class="text-xs text-slate-400 mt-1">One "key=value" per line. An alert must match all of them.</p>
+  </div>
+
+  <div>
+    <label class="block text-sm font-medium mb-1">Group by</label>
+    <input name="group_by" value="{{.GroupBy}}" placeholder="alertname, instance"
+           class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
+    <p class="text-xs text-slate-400 mt-1">Comma-separated label names. Alerts sharing these values collapse into one Slack message. Leave empty to group by alertname.</p>
+  </div>
+
+  <div>
+    <label class="block text-sm font-medium mb-1">Enrichments (advanced, JSON)</label>
+    <textarea name="enrichments" rows="6" placeholder="[]"
+              class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-slate-400">{{.Enrichments}}</textarea>
+    <p class="text-xs text-slate-400 mt-1">Optional HTTP lookups run before an alert is grouped. Leave empty for none.</p>
+  </div>
+
+  <label class="flex items-center gap-2 text-sm">
+    <input type="checkbox" name="enabled" {{if .Enabled}}checked{{end}} class="rounded border-slate-300">
+    Enabled
+  </label>
+
+  <div class="flex gap-3 pt-2">
+    <button type="submit" class="px-4 py-1.5 rounded-md bg-slate-900 text-white text-sm font-medium hover:bg-slate-700">{{.Submit}}</button>
+    <a href="/rules" class="px-4 py-1.5 rounded-md bg-slate-100 text-slate-700 text-sm font-medium hover:bg-slate-200">Cancel</a>
+  </div>
+</form>
+{{end}}

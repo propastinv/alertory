@@ -17,67 +17,79 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func AlertsHandler(pool *pgxpool.Pool, rules []workflows.WorkflowRule, token string) http.Handler {
+// AlertsHandler ingests an Alertmanager webhook call. It intentionally
+// does no Slack I/O on this path: alerts are matched against rules and
+// upserted into their debounced group (see workflows.ProcessAlert), and
+// the group flush worker sends to Slack later, out of band. That keeps
+// this handler's latency independent of Slack's API and lets Alertmanager
+// get a fast, reliable 200 even during a mass-alert burst - which matters
+// because a slow/failing webhook response is exactly what causes
+// Alertmanager to retry and pile on more load.
+func AlertsHandler(pool *pgxpool.Pool, rules *workflows.RuleStore, token string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authHeader := r.Header.Get("Authorization")
-		expected := "Bearer " + token
-		if authHeader != expected {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
+		if token != "" {
+			if r.Header.Get("Authorization") != "Bearer "+token {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
 		}
 
 		var payload models.WebhookPayload
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			http.Error(w, "invalid json", 400)
+			http.Error(w, "invalid json", http.StatusBadRequest)
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		if len(payload.Alerts) == 0 {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"ok"}`))
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 		defer cancel()
 
-		var upserts []db.AlertUpsert
-		var allPendings []workflows.SlackPending
+		fingerprints := make([]string, 0, len(payload.Alerts))
+		for _, a := range payload.Alerts {
+			fingerprints = append(fingerprints, a.Fingerprint)
+		}
+
+		knownStartsAt, err := db.BatchGetActiveAlerts(ctx, pool, fingerprints)
+		if err != nil {
+			log.Printf("failed to batch load active alerts: %v", err)
+		}
+
+		activeRules := rules.Rules()
+		upserts := make([]db.AlertUpsert, 0, len(payload.Alerts))
 
 		for _, alert := range payload.Alerts {
-			alertname := alert.Labels["alertname"]
-
-			existingMeta, err := db.GetActiveAlertMeta(ctx, pool, alert.Fingerprint)
-			if err != nil {
-				log.Printf("failed to load alert meta: %v", err)
+			startsAt := time.Now()
+			if alert.StartsAt != nil {
+				startsAt = *alert.StartsAt
 			}
 
-			isNew, err := db.IsNewAlert(ctx, pool, alert.Fingerprint, *alert.StartsAt)
-			if err != nil {
-				log.Printf("error checking if alert is new: %v", err)
-			}
+			prevStartsAt, known := knownStartsAt[alert.Fingerprint]
+			isNew := !known || !prevStartsAt.Equal(startsAt)
 
 			upsert := db.AlertUpsert{
 				Fingerprint: alert.Fingerprint,
-				Alertname:   alertname,
+				Alertname:   alert.Labels["alertname"],
 				Status:      alert.Status,
-				StartsAt:    *alert.StartsAt,
+				StartsAt:    startsAt,
 				EndsAt:      alert.EndsAt,
 				Labels:      alert.Labels,
 				Annotations: alert.Annotations,
 				Payload:     alert,
-				Meta:        existingMeta,
 			}
 
-			var pendings []workflows.SlackPending
-			upsert, pendings = workflows.ProcessAlert(ctx, upsert, rules, pool, isNew)
-			allPendings = append(allPendings, pendings...)
+			workflows.ProcessAlert(ctx, pool, activeRules, upsert, isNew)
 			upserts = append(upserts, upsert)
 		}
 
-		// Send all firing alerts as one Slack message per channel.
-		workflows.SendBatchedSlack(pool, allPendings)
-
-		for _, upsert := range upserts {
-			if err := db.UpsertAlert(ctx, pool, upsert); err != nil {
-				log.Printf("upsert alert failed: %v", err)
-				http.Error(w, "db error", 500)
-				return
-			}
+		if err := db.BatchUpsertAlerts(ctx, pool, upserts); err != nil {
+			log.Printf("batch upsert failed: %v", err)
+			http.Error(w, "db error", http.StatusInternalServerError)
+			return
 		}
 
 		w.WriteHeader(http.StatusOK)
@@ -124,7 +136,10 @@ func SlackOAuthCallback(pool *pgxpool.Pool) http.Handler {
 		var result struct {
 			OK          bool   `json:"ok"`
 			AccessToken string `json:"access_token"`
-			Error       string `json:"error"`
+			Team        struct {
+				Name string `json:"name"`
+			} `json:"team"`
+			Error string `json:"error"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 			http.Error(w, "invalid response from Slack", http.StatusInternalServerError)
@@ -140,8 +155,10 @@ func SlackOAuthCallback(pool *pgxpool.Pool) http.Handler {
 			http.Error(w, "failed to save token", http.StatusInternalServerError)
 			return
 		}
+		if result.Team.Name != "" {
+			_ = db.UpsertProviderSetting(pool, "slack", "team_name", result.Team.Name)
+		}
 
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "Slack connected successfully")
+		http.Redirect(w, r, "/settings", http.StatusFound)
 	})
 }

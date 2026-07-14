@@ -3,160 +3,164 @@ package workflows
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"text/template"
 	"time"
 
-	"gopkg.in/yaml.v3"
-	"io/ioutil"
-	"path/filepath"
-
-	"github.com/propastinv/alertory/internal/db"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/propastinv/alertory/internal/db"
 )
 
-type MatchRule struct {
-	Labels map[string]string `yaml:"labels"`
-}
+// Debounce/window used to collapse bursts of alerts into a single Slack
+// message: the group's flush is pushed out by debounceWindow on every new
+// event, but never past first_event_at + maxGroupWindow, so a continuous
+// storm still gets flushed periodically instead of waiting forever.
+const (
+	debounceWindow = 8 * time.Second
+	maxGroupWindow = 45 * time.Second
+)
 
-type HTTPEnrichmentParam struct {
-	Name  string `yaml:"name"`
-	Value string `yaml:"value"`
-}
-
-type HTTPEnrichment struct {
-	Name          string                  `yaml:"name"`
-	URL           string                  `yaml:"url"`
-	Method        string                  `yaml:"method,omitempty"`
-	Params        []HTTPEnrichmentParam   `yaml:"params,omitempty"`
-	ResponseField string                  `yaml:"response_field,omitempty"`
-	StoreIn       string                  `yaml:"store_in,omitempty"`
-}
-
-type SlackAttachmentField struct {
-	Title string `yaml:"title" json:"title"`
-	Value string `yaml:"value" json:"value"`
-	Short bool   `yaml:"short,omitempty" json:"short,omitempty"`
-}
-
-type SlackAttachment struct {
-	Color     string                 `yaml:"color,omitempty" json:"color,omitempty"`
-	Title     string                 `yaml:"title,omitempty" json:"title,omitempty"`
-	TitleLink string                 `yaml:"title_link,omitempty" json:"title_link,omitempty"`
-	Fields    []SlackAttachmentField `yaml:"fields,omitempty" json:"fields,omitempty"`
-}
-
-type Action struct {
-	Type                string            `yaml:"type"`
-	Channel             string            `yaml:"channel,omitempty"`
-	Message             string            `yaml:"message,omitempty"`
-	Attachments         []SlackAttachment `yaml:"attachments,omitempty"`
-	ResolveMessage      string            `yaml:"resolve_message,omitempty"`
-	ResolveAttachments  []SlackAttachment `yaml:"resolve_attachments,omitempty"`
-}
-
-type WorkflowRule struct {
-	Name        string              `yaml:"name"`
-	Match       MatchRule           `yaml:"match"`
-	Enrichments []HTTPEnrichment    `yaml:"enrichments,omitempty"`
-	Actions     []Action            `yaml:"actions"`
-}
-
-type SlackMessage struct {
-	Channel     string            `json:"channel"`
-	Text        string            `json:"text,omitempty"`
-	Attachments []SlackAttachment `json:"attachments,omitempty"`
-}
-
-type SlackPostResult struct {
-	Channel string `json:"channel"`
-	TS      string `json:"ts"`
-}
-
-// SlackPending holds a rendered Slack message waiting to be batched and sent.
-type SlackPending struct {
-	Channel      string
-	Text         string
-	Attachments  []SlackAttachment
-	WorkflowMeta map[string]any // points into alert.Meta — updated in-place after send
-	StartsAt     string
-}
-
-func (r WorkflowRule) Matches(alert db.AlertUpsert) bool {
-	for k, v := range r.Match.Labels {
-		if val, ok := alert.Labels[k]; !ok || val != v {
-			return false
-		}
-	}
-	return true
-}
-
-
-func enrichAlert(alert db.AlertUpsert, enrichments []HTTPEnrichment) (db.AlertUpsert, error) {
-	for _, enrichment := range enrichments {
-		renderedURL, err := renderTemplate(enrichment.URL, alert)
-		if err != nil {
-			log.Printf("failed to render enrichment URL: %v", err)
+// ProcessAlert matches an incoming alert against every enabled rule and,
+// for each match, upserts the alert as a member of its debounced group.
+// It does not talk to Slack directly - that happens later, out of the
+// HTTP request path, in RunFlushWorker - so ingestion latency no longer
+// depends on Slack's API being fast or even reachable.
+func ProcessAlert(ctx context.Context, pool *pgxpool.Pool, rules []db.WorkflowRule, alert db.AlertUpsert, isNew bool) {
+	for _, rule := range rules {
+		if !rule.Matches(alert.Labels) {
 			continue
 		}
 
-		params := make(map[string]string)
-		for _, p := range enrichment.Params {
-			renderedValue, err := renderTemplate(p.Value, alert)
-			if err != nil {
-				log.Printf("failed to render enrichment param %s: %v", p.Name, err)
-				continue
-			}
-			params[p.Name] = renderedValue
+		if len(rule.Enrichments) > 0 && isNew && alert.Status == "firing" {
+			enrichAlert(&alert, rule.Enrichments)
 		}
 
-		method := enrichment.Method
+		target := ""
+		if rule.TargetLabel != "" {
+			target = alert.Labels[rule.TargetLabel]
+		}
+
+		member := db.GroupMember{
+			Fingerprint: alert.Fingerprint,
+			Alertname:   alert.Alertname,
+			Status:      alert.Status,
+			Target:      target,
+			Annotations: alert.Annotations,
+			StartsAt:    alert.StartsAt,
+			EndsAt:      alert.EndsAt,
+			UpdatedAt:   time.Now(),
+		}
+
+		groupKey := computeGroupKey(rule, alert.Labels)
+
+		if err := db.UpsertGroupMember(ctx, pool, groupKey, rule.Name, rule.Channel, rule.Team, member, debounceWindow, maxGroupWindow); err != nil {
+			log.Printf("failed to upsert alert group member (rule=%s fingerprint=%s): %v", rule.Name, alert.Fingerprint, err)
+		}
+	}
+}
+
+// computeGroupKey decides which alerts get collapsed into the same Slack
+// message. Alerts sharing a rule, channel, and the same values for the
+// rule's GroupBy labels land in the same group. If GroupBy isn't set, we
+// default to grouping by alertname - this is what turns "200 hosts firing
+// the same alert at once" into one Slack message instead of 200.
+func computeGroupKey(rule db.WorkflowRule, labels map[string]string) string {
+	groupBy := rule.GroupBy
+	if len(groupBy) == 0 {
+		groupBy = []string{"alertname"}
+	}
+
+	keys := make([]string, len(groupBy))
+	copy(keys, groupBy)
+	sort.Strings(keys)
+
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+labels[k])
+	}
+
+	h := sha1.New()
+	h.Write([]byte(rule.Name + "|" + rule.Channel + "|" + strings.Join(parts, ",")))
+	return rule.Name + ":" + hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+// enrichAlert runs each configured HTTP enrichment and stores its result
+// into the alert's annotations under Enrichment.StoreIn (or Name). Errors
+// are logged and skipped - a broken enrichment endpoint shouldn't block
+// the alert from being grouped and sent.
+func enrichAlert(alert *db.AlertUpsert, enrichments []db.Enrichment) {
+	for _, e := range enrichments {
+		renderedURL, err := renderLabelTemplate(e.URL, alert.Labels)
+		if err != nil {
+			log.Printf("enrichment %s: bad URL template: %v", e.Name, err)
+			continue
+		}
+
+		params := make(map[string]string, len(e.Params))
+		for _, p := range e.Params {
+			v, err := renderLabelTemplate(p.Value, alert.Labels)
+			if err != nil {
+				log.Printf("enrichment %s: bad param template %s: %v", e.Name, p.Name, err)
+				continue
+			}
+			params[p.Name] = v
+		}
+
+		method := e.Method
 		if method == "" {
 			method = "GET"
 		}
 
 		if method == "GET" && len(params) > 0 {
-			query := ""
-			for k, v := range params {
-				if query != "" {
-					query += "&"
-				}
-				query += k + "=" + v
+			keys := make([]string, 0, len(params))
+			for k := range params {
+				keys = append(keys, k)
 			}
-			if query != "" {
-				renderedURL += "?" + query
+			sort.Strings(keys)
+			var q []string
+			for _, k := range keys {
+				q = append(q, k+"="+params[k])
 			}
+			renderedURL += "?" + strings.Join(q, "&")
 		}
 
-		req, _ := http.NewRequest(method, renderedURL, nil)
+		req, err := http.NewRequest(method, renderedURL, nil)
+		if err != nil {
+			log.Printf("enrichment %s: bad request: %v", e.Name, err)
+			continue
+		}
 		req.Header.Set("Content-Type", "application/json")
 
 		client := &http.Client{Timeout: 5 * time.Second}
 		resp, err := client.Do(req)
 		if err != nil {
-			log.Printf("failed to make enrichment request to %s: %v", renderedURL, err)
-			continue
-		}
-		defer resp.Body.Close()
-
-		var result map[string]interface{}
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			log.Printf("failed to decode enrichment response: %v", err)
+			log.Printf("enrichment %s: request failed: %v", e.Name, err)
 			continue
 		}
 
-		storeIn := enrichment.StoreIn
+		var result map[string]any
+		decodeErr := json.NewDecoder(resp.Body).Decode(&result)
+		resp.Body.Close()
+		if decodeErr != nil {
+			log.Printf("enrichment %s: bad response: %v", e.Name, decodeErr)
+			continue
+		}
+
+		storeIn := e.StoreIn
 		if storeIn == "" {
-			storeIn = enrichment.Name
+			storeIn = e.Name
 		}
 
-		var value interface{} = result
-		if enrichment.ResponseField != "" {
-			value = result[enrichment.ResponseField]
+		var value any = result
+		if e.ResponseField != "" {
+			value = result[e.ResponseField]
 		}
 
 		if alert.Annotations == nil {
@@ -164,376 +168,22 @@ func enrichAlert(alert db.AlertUpsert, enrichments []HTTPEnrichment) (db.AlertUp
 		}
 		alert.Annotations[storeIn] = fmt.Sprintf("%v", value)
 	}
-
-	return alert, nil
 }
 
-func renderTemplate(tmpl string, alert db.AlertUpsert) (string, error) {
-	t, err := template.New("tmpl").Parse(tmpl)
+type labelTemplateData struct {
+	Labels map[string]string
+}
+
+// renderLabelTemplate supports the same "{{ .Labels.NAME }}" templates the
+// old YAML rules used for enrichment URLs/params.
+func renderLabelTemplate(tmpl string, labels map[string]string) (string, error) {
+	t, err := template.New("t").Parse(tmpl)
 	if err != nil {
 		return "", err
 	}
 	var buf bytes.Buffer
-	if err := t.Execute(&buf, alert); err != nil {
+	if err := t.Execute(&buf, labelTemplateData{Labels: labels}); err != nil {
 		return "", err
 	}
 	return buf.String(), nil
-}
-
-func renderAttachment(a SlackAttachment, alert db.AlertUpsert) SlackAttachment {
-	ra := a
-	if a.Title != "" {
-		t, _ := template.New("title").Parse(a.Title)
-		var buf bytes.Buffer
-		_ = t.Execute(&buf, alert)
-		ra.Title = buf.String()
-	}
-	if a.TitleLink != "" {
-		t, _ := template.New("link").Parse(a.TitleLink)
-		var buf bytes.Buffer
-		_ = t.Execute(&buf, alert)
-		ra.TitleLink = buf.String()
-	}
-	ra.Fields = make([]SlackAttachmentField, len(a.Fields))
-	for i, f := range a.Fields {
-		t, _ := template.New("field").Parse(f.Value)
-		var buf bytes.Buffer
-		_ = t.Execute(&buf, alert)
-		ra.Fields[i] = SlackAttachmentField{
-			Title: f.Title,
-			Value: buf.String(),
-			Short: f.Short,
-		}
-	}
-	return ra
-}
-
-func ProcessAlert(ctx context.Context, alert db.AlertUpsert, rules []WorkflowRule, pool *pgxpool.Pool, isNew bool) (db.AlertUpsert, []SlackPending) {
-	var pendings []SlackPending
-
-	for _, rule := range rules {
-		if !rule.Matches(alert) {
-			continue
-		}
-
-		if len(rule.Enrichments) > 0 && isNew {
-			enrichedAlert, err := enrichAlert(alert, rule.Enrichments)
-			if err != nil {
-				log.Printf("enrichment error: %v", err)
-			} else {
-				alert = enrichedAlert
-			}
-		}
-
-		for _, action := range rule.Actions {
-			if action.Type != "slack" {
-				continue
-			}
-
-			if alert.Meta == nil {
-				alert.Meta = make(map[string]any)
-			}
-
-			workflowsMeta, ok := alert.Meta["workflows"].(map[string]any)
-			if !ok || workflowsMeta == nil {
-				workflowsMeta = make(map[string]any)
-				alert.Meta["workflows"] = workflowsMeta
-			}
-
-			workflowMeta, ok := workflowsMeta[rule.Name].(map[string]any)
-			if !ok || workflowMeta == nil {
-				workflowMeta = make(map[string]any)
-				workflowsMeta[rule.Name] = workflowMeta
-			}
-
-			slackMeta, _ := workflowMeta["slack"].(map[string]any)
-
-			switch alert.Status {
-			case "firing":
-				send := true
-				if slackMeta != nil {
-					if sa, ok := slackMeta["startsAt"].(string); ok && sa == alert.StartsAt.Format(time.RFC3339) {
-						send = false
-					}
-				}
-				if !send {
-					continue
-				}
-
-				var attachments []SlackAttachment
-				if len(action.Attachments) > 0 {
-					for _, a := range action.Attachments {
-						attachments = append(attachments, renderAttachment(a, alert))
-					}
-				}
-
-				var text string
-				if action.Message != "" {
-					t, err := renderTemplate(action.Message, alert)
-					if err != nil {
-						log.Printf("template error: %v", err)
-						continue
-					}
-					text = t
-				}
-
-				pendings = append(pendings, SlackPending{
-					Channel:      action.Channel,
-					Text:         text,
-					Attachments:  attachments,
-					WorkflowMeta: workflowMeta,
-					StartsAt:     alert.StartsAt.Format(time.RFC3339),
-				})
-
-			case "resolved":
-				if slackMeta != nil {
-					channel, _ := slackMeta["channel"].(string)
-					ts, _ := slackMeta["ts"].(string)
-
-					dbAlert, err := db.GetAlert(ctx, pool, alert.Fingerprint)
-					if err != nil {
-						log.Printf("failed to load alert from DB: %v", err)
-						dbAlert = &alert
-					}
-					if dbAlert == nil {
-						dbAlert = &alert
-					}
-
-					dbAlert.EndsAt = alert.EndsAt
-					dbAlert.StartsAt = alert.StartsAt
-
-					var resolveAttachments []SlackAttachment
-					if len(action.ResolveAttachments) > 0 {
-						for _, a := range action.ResolveAttachments {
-							resolveAttachments = append(resolveAttachments, renderAttachment(a, *dbAlert))
-						}
-					}
-
-					var resolvedMsg string
-					if action.ResolveMessage != "" {
-						t, err := renderTemplate(action.ResolveMessage, *dbAlert)
-						if err != nil {
-							log.Printf("template error: %v", err)
-							continue
-						}
-						resolvedMsg = t
-					} else if len(resolveAttachments) == 0 {
-						resolvedMsg = fmt.Sprintf("*Resolved:* alert %s is back to normal", alert.Alertname)
-					}
-
-					if err := updateSlackMessageWithAttachments(pool, channel, ts, resolvedMsg, resolveAttachments); err != nil {
-						log.Printf("failed to update Slack message on resolve: %v", err)
-					} else {
-						slackMeta["resolved"] = true
-						workflowMeta["slack"] = slackMeta
-					}
-				}
-			}
-		}
-	}
-
-	return alert, pendings
-}
-
-// SendBatchedSlack groups pending Slack sends by channel and sends one message per channel.
-// WorkflowMeta in each pending is updated in-place with the resulting ts.
-func SendBatchedSlack(pool *pgxpool.Pool, pendings []SlackPending) {
-	if len(pendings) == 0 {
-		return
-	}
-
-	type group struct {
-		texts       []string
-		attachments []SlackAttachment
-		items       []SlackPending
-	}
-	byChannel := make(map[string]*group)
-
-	for _, p := range pendings {
-		g := byChannel[p.Channel]
-		if g == nil {
-			g = &group{}
-			byChannel[p.Channel] = g
-		}
-		if p.Text != "" {
-			g.texts = append(g.texts, p.Text)
-		}
-		g.attachments = append(g.attachments, p.Attachments...)
-		g.items = append(g.items, p)
-	}
-
-	for channel, g := range byChannel {
-		combinedText := strings.Join(g.texts, "\n")
-		result, err := sendSlackMessage(pool, channel, combinedText, g.attachments)
-		if err != nil {
-			log.Printf("failed to send batched Slack message to %s: %v", channel, err)
-			continue
-		}
-		for _, p := range g.items {
-			p.WorkflowMeta["slack"] = map[string]any{
-				"channel":  result.Channel,
-				"ts":       result.TS,
-				"startsAt": p.StartsAt,
-			}
-		}
-	}
-}
-
-func sendSlackMessage(pool *pgxpool.Pool, channel, text string, attachments []SlackAttachment) (*SlackPostResult, error) {
-	token := db.GetProviderSetting(pool, "slack", "access_token")
-	if token == "" {
-		return nil, fmt.Errorf("no Slack token found in DB")
-	}
-
-	msg := SlackMessage{
-		Channel:     channel,
-		Text:        text,
-		Attachments: attachments,
-	}
-
-	if text == "" && len(attachments) > 0 {
-		text = " "
-	}
-	msg.Text = text
-	payload, _ := json.Marshal(msg)
-
-	req, _ := http.NewRequest("POST", "https://slack.com/api/chat.postMessage", bytes.NewBuffer(payload))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		OK      bool   `json:"ok"`
-		Error   string `json:"error"`
-		Channel string `json:"channel"`
-		TS      string `json:"ts"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-	if !result.OK {
-		return nil, fmt.Errorf("Slack API error: %s", result.Error)
-	}
-
-	return &SlackPostResult{
-		Channel: result.Channel,
-		TS:      result.TS,
-	}, nil
-}
-
-func updateSlackMessage(pool *pgxpool.Pool, channel, ts, text string) error {
-	token := db.GetProviderSetting(pool, "slack", "access_token")
-	if token == "" {
-		return fmt.Errorf("no Slack token found in DB")
-	}
-
-	payload := map[string]string{
-		"channel": channel,
-		"ts":      ts,
-		"text":    text,
-	}
-	data, _ := json.Marshal(payload)
-
-	req, _ := http.NewRequest("POST", "https://slack.com/api/chat.update", bytes.NewBuffer(data))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return err
-	}
-	if !result.OK {
-		return fmt.Errorf("Slack API error: %s", result.Error)
-	}
-	return nil
-}
-
-func updateSlackMessageWithAttachments(pool *pgxpool.Pool, channel, ts, text string, attachments []SlackAttachment) error {
-	token := db.GetProviderSetting(pool, "slack", "access_token")
-	if token == "" {
-		return fmt.Errorf("no Slack token found in DB")
-	}
-
-	msg := SlackMessage{
-		Channel:     channel,
-		Text:        text,
-		Attachments: attachments,
-	}
-
-	if text == "" && len(attachments) > 0 {
-		text = " "
-		msg.Text = text
-	}
-
-	payload := map[string]interface{}{
-		"channel":     channel,
-		"ts":          ts,
-		"text":        msg.Text,
-		"attachments": msg.Attachments,
-	}
-	data, _ := json.Marshal(payload)
-
-	req, _ := http.NewRequest("POST", "https://slack.com/api/chat.update", bytes.NewBuffer(data))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return err
-	}
-	if !result.OK {
-		return fmt.Errorf("Slack API error: %s", result.Error)
-	}
-	return nil
-}
-
-func LoadWorkflowRules(dir string) ([]WorkflowRule, error) {
-	var rules []WorkflowRule
-	files, err := filepath.Glob(filepath.Join(dir, "*.yaml"))
-	if err != nil {
-		return nil, err
-	}
-
-	for _, f := range files {
-		data, err := ioutil.ReadFile(f)
-		if err != nil {
-			return nil, err
-		}
-
-		var r WorkflowRule
-		if err := yaml.Unmarshal(data, &r); err != nil {
-			return nil, err
-		}
-
-		rules = append(rules, r)
-	}
-
-	return rules, nil
 }

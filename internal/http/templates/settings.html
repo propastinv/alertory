@@ -1,0 +1,27 @@
+{{define "content"}}
+<h1 class="text-xl font-semibold mb-6">Settings</h1>
+
+<div class="bg-white rounded-lg shadow-sm border border-slate-200 p-6 max-w-2xl space-y-4">
+  <h2 class="font-medium">Slack</h2>
+  {{if .Connected}}
+    <p class="text-sm text-emerald-700">Connected{{if .TeamName}} to <span class="font-medium">{{.TeamName}}</span>{{end}}.</p>
+  {{else}}
+    <p class="text-sm text-slate-500">Not connected yet.</p>
+  {{end}}
+
+  {{if .AuthorizeURL}}
+    <a href="{{.AuthorizeURL}}" class="inline-block px-4 py-1.5 rounded-md bg-slate-900 text-white text-sm font-medium hover:bg-slate-700">
+      {{if .Connected}}Reconnect Slack{{else}}Connect Slack{{end}}
+    </a>
+  {{else}}
+    <p class="text-xs text-slate-400">Set SLACK_CLIENT_ID, SLACK_CLIENT_SECRET and APP_URL to enable the Slack OAuth connect flow.</p>
+  {{end}}
+</div>
+
+<div class="bg-white rounded-lg shadow-sm border border-slate-200 p-6 max-w-2xl mt-6 space-y-2">
+  <h2 class="font-medium mb-2">Cleanup</h2>
+  <p class="text-sm text-slate-500">Retention: <span class="font-mono">{{.Retention}}</span></p>
+  <p class="text-sm text-slate-500">Cleanup interval: <span class="font-mono">{{.CleanupInterval}}</span></p>
+  <p class="text-xs text-slate-400 mt-2">Configured via the ALERT_RETENTION / CLEANUP_INTERVAL environment variables.</p>
+</div>
+{{end}}

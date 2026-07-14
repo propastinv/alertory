@@ -1,0 +1,22 @@
+{{define "base"}}
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-50">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Alertory</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="h-full text-slate-900">
+  <nav class="bg-slate-900 text-slate-100 px-6 py-3 flex gap-6 items-center">
+    <span class="font-semibold tracking-tight text-white">Alertory</span>
+    <a href="/" class="text-sm {{if eq .Active "dashboard"}}text-white font-medium{{else}}text-slate-300 hover:text-white{{end}}">Dashboard</a>
+    <a href="/rules" class="text-sm {{if eq .Active "rules"}}text-white font-medium{{else}}text-slate-300 hover:text-white{{end}}">Rules</a>
+    <a href="/settings" class="text-sm {{if eq .Active "settings"}}text-white font-medium{{else}}text-slate-300 hover:text-white{{end}}">Settings</a>
+  </nav>
+  <main class="max-w-5xl mx-auto p-6">
+    {{block "content" .}}{{end}}
+  </main>
+</body>
+</html>
+{{end}}

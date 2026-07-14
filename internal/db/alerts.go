@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -17,177 +18,191 @@ type AlertUpsert struct {
 	Labels      map[string]string
 	Annotations map[string]string
 	Payload     any
-	Meta        map[string]any
 }
 
-func UpsertAlert(ctx context.Context, db *pgxpool.Pool, a AlertUpsert) error {
-	labelsJSON, _ := json.Marshal(a.Labels)
-	annotationsJSON, _ := json.Marshal(a.Annotations)
-	payloadJSON, _ := json.Marshal(a.Payload)
-	metaJSON, _ := json.Marshal(a.Meta)
-
-	_, err := db.Exec(ctx, `
-INSERT INTO alert_events (fingerprint, status, payload)
-VALUES ($1, $2, $3)
-`, a.Fingerprint, a.Status, payloadJSON)
-	if err != nil {
-		return err
+// BatchGetActiveAlerts fetches the last known starts_at for many
+// fingerprints in one round trip, used to decide whether an incoming
+// alert is new/changed. This replaces two sequential queries per alert
+// (GetActiveAlertMeta + IsNewAlert), which turned a single webhook call
+// carrying hundreds of alerts into hundreds of blocking DB round trips.
+func BatchGetActiveAlerts(ctx context.Context, pool *pgxpool.Pool, fingerprints []string) (map[string]time.Time, error) {
+	result := make(map[string]time.Time, len(fingerprints))
+	if len(fingerprints) == 0 {
+		return result, nil
 	}
 
-	_, err = db.Exec(ctx, `
-INSERT INTO active_alerts (
-  fingerprint, alertname, status, starts_at, ends_at,
-  labels, annotations, meta,
-  first_seen, last_seen, updated_at
-)
-VALUES (
-  $1, $2, $3, $4, $5,
-  $6, $7, $8,
-  now(), now(), now()
-)
-ON CONFLICT (fingerprint)
-DO UPDATE SET
-  status = EXCLUDED.status,
-  starts_at = EXCLUDED.starts_at,
-  ends_at = EXCLUDED.ends_at,
-  meta = EXCLUDED.meta,
-  last_seen = now(),
-  updated_at = now()
-`, a.Fingerprint, a.Alertname, a.Status, a.StartsAt, a.EndsAt,
-	string(labelsJSON), string(annotationsJSON), string(metaJSON))
-
-	return err
-}
-
-func GetActiveAlertMeta(ctx context.Context, db *pgxpool.Pool, fingerprint string) (map[string]any, error) {
-	var metaJSON *string
-
-	err := db.QueryRow(ctx, `
-		SELECT meta
+	rows, err := pool.Query(ctx, `
+		SELECT fingerprint, starts_at
 		FROM active_alerts
-		WHERE fingerprint = $1
-	`, fingerprint).Scan(&metaJSON)
-
+		WHERE fingerprint = ANY($1)
+	`, fingerprints)
 	if err != nil {
-		if err.Error() == "no rows in result set" {
-			return nil, nil
-		}
 		return nil, err
 	}
+	defer rows.Close()
 
-	if metaJSON == nil || *metaJSON == "" {
-		return nil, nil
+	for rows.Next() {
+		var fp string
+		var startsAt time.Time
+		if err := rows.Scan(&fp, &startsAt); err != nil {
+			return nil, err
+		}
+		result[fp] = startsAt
+	}
+	return result, rows.Err()
+}
+
+// BatchUpsertAlerts pipelines every alert_events insert and active_alerts
+// upsert for a webhook call into a single round trip via pgx.Batch,
+// replacing what used to be 2*N sequential Exec calls.
+func BatchUpsertAlerts(ctx context.Context, pool *pgxpool.Pool, upserts []AlertUpsert) error {
+	if len(upserts) == 0 {
+		return nil
 	}
 
-	var meta map[string]any
-	if err := json.Unmarshal([]byte(*metaJSON), &meta); err != nil {
+	batch := &pgx.Batch{}
+	for _, a := range upserts {
+		labelsJSON, _ := json.Marshal(a.Labels)
+		annotationsJSON, _ := json.Marshal(a.Annotations)
+		payloadJSON, _ := json.Marshal(a.Payload)
+
+		batch.Queue(`
+			INSERT INTO alert_events (fingerprint, status, payload)
+			VALUES ($1, $2, $3)
+		`, a.Fingerprint, a.Status, string(payloadJSON))
+
+		batch.Queue(`
+			INSERT INTO active_alerts (
+			  fingerprint, alertname, status, starts_at, ends_at,
+			  labels, annotations,
+			  first_seen, last_seen, updated_at
+			)
+			VALUES (
+			  $1, $2, $3, $4, $5,
+			  $6, $7,
+			  now(), now(), now()
+			)
+			ON CONFLICT (fingerprint)
+			DO UPDATE SET
+			  status = EXCLUDED.status,
+			  starts_at = EXCLUDED.starts_at,
+			  ends_at = EXCLUDED.ends_at,
+			  last_seen = now(),
+			  updated_at = now()
+		`, a.Fingerprint, a.Alertname, a.Status, a.StartsAt, a.EndsAt,
+			string(labelsJSON), string(annotationsJSON))
+	}
+
+	br := pool.SendBatch(ctx, batch)
+	defer br.Close()
+
+	for i := 0; i < batch.Len(); i++ {
+		if _, err := br.Exec(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ActiveAlertRow is a row of the dashboard's active alerts table.
+type ActiveAlertRow struct {
+	Fingerprint string
+	Alertname   string
+	Status      string
+	Labels      map[string]string
+	StartsAt    time.Time
+	LastSeen    time.Time
+}
+
+// ListActiveAlerts powers the web UI dashboard. statusFilter == "" means
+// no filter.
+func ListActiveAlerts(ctx context.Context, pool *pgxpool.Pool, statusFilter string, limit int) ([]ActiveAlertRow, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+
+	query := `
+		SELECT fingerprint, alertname, status, labels, starts_at, last_seen
+		FROM active_alerts
+		WHERE ($1 = '' OR status = $1)
+		ORDER BY last_seen DESC
+		LIMIT $2
+	`
+
+	rows, err := pool.Query(ctx, query, statusFilter, limit)
+	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
-	return meta, nil
-}
-func IsNewAlert(ctx context.Context, db *pgxpool.Pool, fingerprint string, startsAt time.Time) (bool, error) {
-	var dbStartsAt *time.Time
-
-	err := db.QueryRow(ctx, `
-		SELECT starts_at
-		FROM active_alerts
-		WHERE fingerprint = $1
-	`, fingerprint).Scan(&dbStartsAt)
-
-	if err != nil {
-		if err.Error() == "no rows in result set" {
-			return true, nil
+	var out []ActiveAlertRow
+	for rows.Next() {
+		var r ActiveAlertRow
+		var labelsJSON *string
+		if err := rows.Scan(&r.Fingerprint, &r.Alertname, &r.Status, &labelsJSON, &r.StartsAt, &r.LastSeen); err != nil {
+			return nil, err
 		}
-		return false, err
-	}
-
-	if dbStartsAt == nil {
-		return true, nil
-	}
-
-	return !dbStartsAt.Equal(startsAt), nil
-}
-func GetAlert(ctx context.Context, db *pgxpool.Pool, fingerprint string) (*AlertUpsert, error) {
-	var alertname, status string
-	var startsAt time.Time
-	var endsAt *time.Time
-	var labelsJSON, annotationsJSON *string
-
-	err := db.QueryRow(ctx, `
-		SELECT alertname, status, starts_at, ends_at, labels, annotations
-		FROM active_alerts
-		WHERE fingerprint = $1
-	`, fingerprint).Scan(&alertname, &status, &startsAt, &endsAt, &labelsJSON, &annotationsJSON)
-
-	if err != nil {
-		if err.Error() == "no rows in result set" {
-			return nil, nil
+		if labelsJSON != nil {
+			_ = json.Unmarshal([]byte(*labelsJSON), &r.Labels)
 		}
-		return nil, err
+		out = append(out, r)
 	}
-
-	var labels map[string]string
-	var annotations map[string]string
-
-	if labelsJSON != nil {
-		json.Unmarshal([]byte(*labelsJSON), &labels)
-	}
-	if annotationsJSON != nil {
-		json.Unmarshal([]byte(*annotationsJSON), &annotations)
-	}
-
-	return &AlertUpsert{
-		Fingerprint: fingerprint,
-		Alertname:   alertname,
-		Status:      status,
-		StartsAt:    startsAt,
-		EndsAt:      endsAt,
-		Labels:      labels,
-		Annotations: annotations,
-	}, nil
+	return out, rows.Err()
 }
 
-func DeleteOldAlerts(ctx context.Context, db *pgxpool.Pool, olderThan time.Duration) (int64, int64, error) {
+// DeleteOldAlerts trims both alert tables, deleting in small batches so a
+// large backlog can't hold a single long-running transaction/lock on a
+// busy table.
+func DeleteOldAlerts(ctx context.Context, pool *pgxpool.Pool, olderThan time.Duration) (int64, int64, error) {
 	cutoff := time.Now().Add(-olderThan)
 
-	res1, err := db.Exec(ctx, `DELETE FROM active_alerts WHERE last_seen < $1`, cutoff)
+	activeDeleted, err := deleteInBatches(ctx, pool, `
+		DELETE FROM active_alerts
+		WHERE ctid IN (
+		  SELECT ctid FROM active_alerts WHERE last_seen < $1 LIMIT 5000
+		)
+	`, cutoff)
 	if err != nil {
-		return 0, 0, err
+		return activeDeleted, 0, err
 	}
 
-	res2, err := db.Exec(ctx, `DELETE FROM alert_events WHERE received_at < $1`, cutoff)
+	eventsDeleted, err := deleteInBatches(ctx, pool, `
+		DELETE FROM alert_events
+		WHERE ctid IN (
+		  SELECT ctid FROM alert_events WHERE received_at < $1 LIMIT 5000
+		)
+	`, cutoff)
 	if err != nil {
-		return res1.RowsAffected(), 0, err
+		return activeDeleted, eventsDeleted, err
 	}
 
-	return res1.RowsAffected(), res2.RowsAffected(), nil
+	return activeDeleted, eventsDeleted, nil
 }
 
-func GetAnnotations(ctx context.Context, db *pgxpool.Pool, fingerprint string) (map[string]string, error) {
-	var annotationsJSON *string
-
-	err := db.QueryRow(ctx, `
-		SELECT annotations
-		FROM active_alerts
-		WHERE fingerprint = $1
-	`, fingerprint).Scan(&annotationsJSON)
-
-	if err != nil {
-		if err.Error() == "no rows in result set" {
-			return nil, nil
+// VacuumAnalyze is run after a cleanup pass removes a meaningful number of
+// rows. This service is insert/delete-heavy (every alert writes an event
+// row and every cleanup pass deletes a batch), which is exactly the
+// workload that makes tables bloat between scheduled autovacuum runs.
+func VacuumAnalyze(ctx context.Context, pool *pgxpool.Pool) error {
+	for _, table := range []string{"active_alerts", "alert_events", "alert_groups"} {
+		if _, err := pool.Exec(ctx, "VACUUM (ANALYZE) "+table); err != nil {
+			return err
 		}
-		return nil, err
 	}
+	return nil
+}
 
-	if annotationsJSON == nil {
-		return nil, nil
+func deleteInBatches(ctx context.Context, pool *pgxpool.Pool, query string, cutoff time.Time) (int64, error) {
+	var total int64
+	for {
+		res, err := pool.Exec(ctx, query, cutoff)
+		if err != nil {
+			return total, err
+		}
+		n := res.RowsAffected()
+		total += n
+		if n == 0 {
+			return total, nil
+		}
 	}
-
-	var annotations map[string]string
-	if err := json.Unmarshal([]byte(*annotationsJSON), &annotations); err != nil {
-		return nil, err
-	}
-
-	return annotations, nil
 }
