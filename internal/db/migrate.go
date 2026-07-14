@@ -85,12 +85,15 @@ ON providers(provider, key);
 `,
 		// alert_groups is the durable dedup/debounce queue: one row per
 		// (rule, channel, group-by key). Incoming alerts upsert themselves
-		// into "members" instead of triggering an immediate Slack send; a
-		// background worker flushes rows once they're due, rebuilding the
-		// whole Slack message from current member state every time so a
-		// resolve never clobbers other alerts in the same message.
-		// A group row is deleted once every member has resolved and that
-		// final state has been flushed to Slack, so this table's size
+		// into "members" instead of triggering an immediate Slack send. By
+		// default each member ends up as its own Slack message; a member
+		// only shares a message with others when a burst of them showed up
+		// unsent at the same time (see the workflows package's bucketing
+		// logic) - each member tracks its own notified_channel/notified_ts
+		// inside its JSON so per-alert and batched messages are both just
+		// "the set of members whose notified_ts matches".
+		// A group row is deleted once every member has resolved and every
+		// member's last notification reflects that, so this table's size
 		// tracks "currently unresolved alert groups", not overall history.
 		`
 CREATE TABLE IF NOT EXISTS alert_groups (
@@ -100,9 +103,6 @@ CREATE TABLE IF NOT EXISTS alert_groups (
   team             TEXT,
 
   members          JSONB NOT NULL DEFAULT '{}',
-
-  slack_channel_id TEXT,
-  slack_ts         TEXT,
 
   dirty            BOOLEAN NOT NULL DEFAULT true,
   attempts         INT NOT NULL DEFAULT 0,
@@ -114,6 +114,14 @@ CREATE TABLE IF NOT EXISTS alert_groups (
   last_flushed_at  TIMESTAMPTZ,
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+`,
+		// Upgrade path for anything already running the earlier version of
+		// this table, which tracked one Slack message per whole group.
+		`
+ALTER TABLE alert_groups DROP COLUMN IF EXISTS slack_channel_id;
+`,
+		`
+ALTER TABLE alert_groups DROP COLUMN IF EXISTS slack_ts;
 `,
 		// The flush worker polls exactly this shape: unflushed, due rows.
 		`

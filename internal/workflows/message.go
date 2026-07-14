@@ -10,24 +10,48 @@ import (
 	"github.com/propastinv/alertory/internal/slack"
 )
 
-// maxMemberLines caps how many individual alerts get listed in a group
-// message; beyond this we just say how many more there are, so a group of
-// hundreds of members can't blow past Slack's message size limits.
+// maxMemberLines caps how many individual alerts get listed in a combined
+// message; beyond this we just say how many more there are.
 const maxMemberLines = 20
 
-// RenderGroupMessage builds the one fixed Slack layout used for every
-// alert group: a header with firing/resolved counts, a colored attachment
-// with Team/Target/Starts/Resolved fields, and a capped list of member
-// alerts. It always rebuilds the full message from the group's current
-// state, so flushing a group after one of its members resolves can never
-// clobber the rest of the message (the failure mode of the old
-// per-alert chat.update calls).
-func RenderGroupMessage(g db.AlertGroup) (string, []slack.Attachment) {
-	members := sortedMembers(g.Members)
+// RenderBucketMessage renders the Slack content for one message bucket. A
+// single alert (the default, "one alert = one message" case) gets the
+// detailed per-alert layout; more than one alert in a bucket only happens
+// when a burst tripped the mass threshold, and gets the condensed summary
+// layout instead.
+func RenderBucketMessage(team string, members []db.GroupMember) (string, []slack.Attachment) {
+	if len(members) == 1 {
+		return renderIndividual(team, members[0])
+	}
+	return renderBatch(team, members)
+}
+
+func renderIndividual(team string, m db.GroupMember) (string, []slack.Attachment) {
+	icon, color, title := statusStyle(m.Status, m.Alertname)
+
+	var fields []slack.Field
+	if team != "" {
+		fields = append(fields, slack.Field{Title: "Team", Value: team, Short: true})
+	}
+	if m.Target != "" {
+		fields = append(fields, slack.Field{Title: "Target", Value: m.Target, Short: true})
+	}
+	fields = append(fields, slack.Field{Title: "Starts At", Value: m.StartsAt.Format(time.RFC3339), Short: true})
+	if m.Status == "resolved" && m.EndsAt != nil {
+		fields = append(fields, slack.Field{Title: "Resolved At", Value: m.EndsAt.Format(time.RFC3339), Short: true})
+	}
+	for _, k := range sortedKeys(m.Annotations) {
+		fields = append(fields, slack.Field{Title: capitalize(k), Value: m.Annotations[k]})
+	}
+
+	return "", []slack.Attachment{{Color: color, Title: icon + " " + title, Fields: fields}}
+}
+
+func renderBatch(team string, members []db.GroupMember) (string, []slack.Attachment) {
+	sort.Slice(members, func(i, j int) bool { return members[i].StartsAt.Before(members[j].StartsAt) })
 
 	firing, resolved := 0, 0
-	var earliestStart time.Time
-	var latestEnd time.Time
+	var earliestStart, latestEnd time.Time
 	alertnames := map[string]bool{}
 	targets := map[string]bool{}
 
@@ -50,22 +74,16 @@ func RenderGroupMessage(g db.AlertGroup) (string, []slack.Attachment) {
 	}
 
 	allResolved := firing == 0 && len(members) > 0
-
-	title := joinSorted(alertnames)
-	icon := ":rotating_light:"
-	color := "#e01e5a"
+	status := "firing"
 	if allResolved {
-		icon = ":white_check_mark:"
-		color = "#2eb67d"
-		title = "RESOLVED: " + title
+		status = "resolved"
 	}
-	if len(members) > 1 {
-		title = fmt.Sprintf("%s (%d firing, %d resolved)", title, firing, resolved)
-	}
+	icon, color, title := statusStyle(status, joinSorted(alertnames))
+	title = fmt.Sprintf("%s (%d firing, %d resolved)", title, firing, resolved)
 
 	var fields []slack.Field
-	if g.Team != "" {
-		fields = append(fields, slack.Field{Title: "Team", Value: g.Team, Short: true})
+	if team != "" {
+		fields = append(fields, slack.Field{Title: "Team", Value: team, Short: true})
 	}
 	switch len(targets) {
 	case 0:
@@ -89,13 +107,14 @@ func RenderGroupMessage(g db.AlertGroup) (string, []slack.Attachment) {
 		})
 	}
 
-	attachment := slack.Attachment{
-		Color:  color,
-		Title:  icon + " " + title,
-		Fields: fields,
-	}
+	return "", []slack.Attachment{{Color: color, Title: icon + " " + title, Fields: fields}}
+}
 
-	return "", []slack.Attachment{attachment}
+func statusStyle(status, title string) (icon, color, renderedTitle string) {
+	if status == "resolved" {
+		return ":white_check_mark:", "#2eb67d", "RESOLVED: " + title
+	}
+	return ":rotating_light:", "#e01e5a", title
 }
 
 func memberLines(members []db.GroupMember) []string {
@@ -107,7 +126,7 @@ func memberLines(members []db.GroupMember) []string {
 		}
 		statusIcon := "\U0001F525" // fire
 		if m.Status == "resolved" {
-			statusIcon = "✅" // check
+			statusIcon = "✅"
 		}
 		label := m.Target
 		if label == "" {
@@ -118,13 +137,21 @@ func memberLines(members []db.GroupMember) []string {
 	return lines
 }
 
-func sortedMembers(m map[string]db.GroupMember) []db.GroupMember {
-	out := make([]db.GroupMember, 0, len(m))
-	for _, v := range m {
-		out = append(out, v)
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].StartsAt.Before(out[j].StartsAt) })
-	return out
+	sort.Strings(keys)
+	return keys
+}
+
+func capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	r := []rune(s)
+	return strings.ToUpper(string(r[0])) + string(r[1:])
 }
 
 func joinSorted(set map[string]bool) string {

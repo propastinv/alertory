@@ -18,15 +18,6 @@ import (
 	"github.com/propastinv/alertory/internal/db"
 )
 
-// Debounce/window used to collapse bursts of alerts into a single Slack
-// message: the group's flush is pushed out by debounceWindow on every new
-// event, but never past first_event_at + maxGroupWindow, so a continuous
-// storm still gets flushed periodically instead of waiting forever.
-const (
-	debounceWindow = 8 * time.Second
-	maxGroupWindow = 45 * time.Second
-)
-
 // ProcessAlert matches an incoming alert against every enabled rule and,
 // for each match, upserts the alert as a member of its debounced group.
 // It does not talk to Slack directly - that happens later, out of the

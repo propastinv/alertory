@@ -10,6 +10,12 @@ import (
 )
 
 // GroupMember is the state of a single alert inside an alert_groups row.
+// NotifiedChannel/NotifiedTS identify which Slack message currently
+// represents this alert - by default that's a message of its own; it only
+// ends up sharing one with other members when they all became "unsent" at
+// the same time in numbers above the mass-alert threshold. NotifiedStatus
+// is the alert's Status as of the last successful send/update, used to
+// tell whether its message is still up to date.
 type GroupMember struct {
 	Fingerprint string            `json:"fingerprint"`
 	Alertname   string            `json:"alertname"`
@@ -19,21 +25,23 @@ type GroupMember struct {
 	StartsAt    time.Time         `json:"starts_at"`
 	EndsAt      *time.Time        `json:"ends_at,omitempty"`
 	UpdatedAt   time.Time         `json:"updated_at"`
+
+	NotifiedChannel string `json:"notified_channel,omitempty"`
+	NotifiedTS      string `json:"notified_ts,omitempty"`
+	NotifiedStatus  string `json:"notified_status,omitempty"`
 }
 
-// AlertGroup is a durable, debounced batch of alerts that map to a single
-// Slack message. Alerts join a group by upserting themselves as a member;
-// a background worker (see workflows.RunFlushWorker) periodically claims
-// due groups and renders/sends the message for the group as a whole.
+// AlertGroup is a durable queue of alerts sharing a rule/channel/group-by
+// key. It's the unit the flush worker claims and processes; how many
+// actual Slack messages that turns into is decided per-flush from the
+// members' notified state (see workflows.buildBuckets).
 type AlertGroup struct {
-	GroupKey       string
-	RuleName       string
-	Channel        string
-	Team           string
-	Members        map[string]GroupMember
-	SlackChannelID string
-	SlackTS        string
-	Attempts       int
+	GroupKey string
+	RuleName string
+	Channel  string
+	Team     string
+	Members  map[string]GroupMember
+	Attempts int
 }
 
 func (g AlertGroup) AllResolved() bool {
@@ -52,6 +60,14 @@ func (g AlertGroup) AllResolved() bool {
 // (re)arms the debounce timer: flush_after moves out by `debounce` on every
 // new event, but never past first_event_at + maxWindow, so a continuous
 // storm still gets flushed periodically instead of being delayed forever.
+//
+// The member's JSON is merged into the existing one with jsonb_set + ||
+// rather than replaced outright: the incoming GroupMember never carries
+// NotifiedChannel/NotifiedTS/NotifiedStatus (those are only ever set by
+// the flush worker), and thanks to `omitempty` those keys are simply
+// absent from its JSON - so merging preserves whatever notification
+// bookkeeping already existed instead of wiping it out every time an
+// alert's status changes.
 func UpsertGroupMember(ctx context.Context, pool *pgxpool.Pool, groupKey, ruleName, channel, team string, member GroupMember, debounce, maxWindow time.Duration) error {
 	memberJSON, err := json.Marshal(member)
 	if err != nil {
@@ -71,7 +87,12 @@ func UpsertGroupMember(ctx context.Context, pool *pgxpool.Pool, groupKey, ruleNa
 		  true, now(), now() + $7::interval, now() + $8::interval, now()
 		)
 		ON CONFLICT (group_key) DO UPDATE SET
-		  members     = alert_groups.members || jsonb_build_object($5::text, $6::jsonb),
+		  members = jsonb_set(
+		    alert_groups.members,
+		    ARRAY[$5::text],
+		    COALESCE(alert_groups.members -> $5::text, '{}'::jsonb) || $6::jsonb,
+		    true
+		  ),
 		  dirty       = true,
 		  attempts    = 0,
 		  last_error  = NULL,
@@ -96,7 +117,7 @@ func ClaimDueGroups(ctx context.Context, pool *pgxpool.Pool, limit int, lease ti
 	defer tx.Rollback(ctx)
 
 	rows, err := tx.Query(ctx, `
-		SELECT group_key, rule_name, channel, team, members, slack_channel_id, slack_ts, attempts
+		SELECT group_key, rule_name, channel, team, members, attempts
 		FROM alert_groups
 		WHERE dirty AND flush_after <= now()
 		ORDER BY flush_after
@@ -112,20 +133,13 @@ func ClaimDueGroups(ctx context.Context, pool *pgxpool.Pool, limit int, lease ti
 	for rows.Next() {
 		var g AlertGroup
 		var membersJSON []byte
-		var slackChannelID, slackTS *string
 
-		if err := rows.Scan(&g.GroupKey, &g.RuleName, &g.Channel, &g.Team, &membersJSON, &slackChannelID, &slackTS, &g.Attempts); err != nil {
+		if err := rows.Scan(&g.GroupKey, &g.RuleName, &g.Channel, &g.Team, &membersJSON, &g.Attempts); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		g.Members = map[string]GroupMember{}
 		_ = json.Unmarshal(membersJSON, &g.Members)
-		if slackChannelID != nil {
-			g.SlackChannelID = *slackChannelID
-		}
-		if slackTS != nil {
-			g.SlackTS = *slackTS
-		}
 		groups = append(groups, g)
 		keys = append(keys, g.GroupKey)
 	}
@@ -148,44 +162,57 @@ func ClaimDueGroups(ctx context.Context, pool *pgxpool.Pool, limit int, lease ti
 	return groups, tx.Commit(ctx)
 }
 
-// FinalizeGroupSent records where the (re)rendered message ended up. If
-// every member has resolved, the group's job is done and the row is
-// removed; otherwise it's left clean until new members arrive.
-func FinalizeGroupSent(ctx context.Context, pool *pgxpool.Pool, groupKey, slackChannelID, slackTS string, fullyResolved bool) error {
-	if fullyResolved {
+// SaveGroupProgress persists each member's updated notification state
+// after a successful flush pass. If every member is resolved and its
+// message already reflects that, the group's job is done and the row is
+// removed; otherwise it's saved clean (dirty=false) until something
+// changes again.
+func SaveGroupProgress(ctx context.Context, pool *pgxpool.Pool, groupKey string, members map[string]GroupMember, done bool) error {
+	if done {
 		_, err := pool.Exec(ctx, `DELETE FROM alert_groups WHERE group_key = $1`, groupKey)
 		return err
 	}
 
-	_, err := pool.Exec(ctx, `
+	membersJSON, err := json.Marshal(members)
+	if err != nil {
+		return err
+	}
+
+	_, err = pool.Exec(ctx, `
 		UPDATE alert_groups
-		SET slack_channel_id = $2, slack_ts = $3, last_flushed_at = now(), attempts = 0, last_error = NULL
+		SET members = $2, dirty = false, attempts = 0, last_error = NULL, last_flushed_at = now(), updated_at = now()
 		WHERE group_key = $1
-	`, groupKey, slackChannelID, slackTS)
+	`, groupKey, string(membersJSON))
 	return err
 }
 
-// FinalizeGroupFailed re-arms a group for retry with capped exponential
-// backoff so a persistently failing send (e.g. bad token) doesn't hammer
-// the Slack API or the flush worker every tick.
-func FinalizeGroupFailed(ctx context.Context, pool *pgxpool.Pool, groupKey string, attempts int, sendErr error) error {
+// SaveGroupProgressFailed persists whatever succeeded before a failure
+// (some buckets may have gone out fine) and re-arms the group for retry
+// with capped exponential backoff, so a persistently failing send (e.g.
+// bad token) doesn't hammer the Slack API or the flush worker every tick.
+func SaveGroupProgressFailed(ctx context.Context, pool *pgxpool.Pool, groupKey string, members map[string]GroupMember, attempts int, sendErr error) error {
+	membersJSON, err := json.Marshal(members)
+	if err != nil {
+		return err
+	}
+
 	backoff := time.Duration(attempts+1) * 10 * time.Second
 	if backoff > 5*time.Minute {
 		backoff = 5 * time.Minute
 	}
 
-	_, err := pool.Exec(ctx, `
+	_, err = pool.Exec(ctx, `
 		UPDATE alert_groups
-		SET dirty = true, attempts = attempts + 1, last_error = $2, flush_after = now() + $3::interval
+		SET members = $2, dirty = true, attempts = attempts + 1, last_error = $3, flush_after = now() + $4::interval, updated_at = now()
 		WHERE group_key = $1
-	`, groupKey, sendErr.Error(), fmt.Sprintf("%d seconds", int(backoff.Seconds())))
+	`, groupKey, string(membersJSON), sendErr.Error(), fmt.Sprintf("%d seconds", int(backoff.Seconds())))
 	return err
 }
 
 // CleanupResolvedGroups is a safety net for groups whose final flush never
-// ran (e.g. the process was killed between claiming and finalizing): any
-// group where every member is resolved and hasn't changed in a while gets
-// removed so this table can't grow unbounded.
+// ran (e.g. the process was killed mid-flush): any group where every
+// member is resolved and hasn't changed in a while gets removed so this
+// table can't grow unbounded.
 func CleanupResolvedGroups(ctx context.Context, pool *pgxpool.Pool, olderThan time.Duration) (int64, error) {
 	res, err := pool.Exec(ctx, `
 		DELETE FROM alert_groups

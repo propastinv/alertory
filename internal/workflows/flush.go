@@ -20,8 +20,9 @@ const (
 )
 
 // RunFlushWorker periodically claims due alert groups and sends/updates
-// their Slack message. It's safe to run from multiple instances of this
-// service at once (see db.ClaimDueGroups). Blocks until ctx is cancelled.
+// whatever Slack messages they need. Safe to run from multiple instances
+// of this service at once (see db.ClaimDueGroups). Blocks until ctx is
+// cancelled.
 func RunFlushWorker(ctx context.Context, pool *pgxpool.Pool) {
 	ticker := time.NewTicker(flushInterval)
 	defer ticker.Stop()
@@ -49,33 +50,69 @@ func flushDueGroups(ctx context.Context, pool *pgxpool.Pool) {
 	token := db.GetProviderSetting(pool, "slack", "access_token")
 
 	for _, g := range groups {
-		text, attachments := RenderGroupMessage(g)
-		fullyResolved := g.AllResolved()
+		processGroup(ctx, pool, token, g)
+	}
+}
 
-		var channelID, ts string
-		var sendErr error
+// processGroup sends or updates exactly the Slack messages needed to
+// reflect a group's current state. By default every alert gets its own
+// message; a set of alerts that first became "unsent" together in numbers
+// greater than massThreshold is collapsed into one combined message
+// instead (see buildBuckets). Messages that already exist are only
+// touched if something in them actually changed since they were last
+// sent, so a quiet group produces zero Slack calls.
+func processGroup(ctx context.Context, pool *pgxpool.Pool, token string, g db.AlertGroup) {
+	buckets := buildBuckets(g.Members, massThreshold)
 
-		if g.SlackTS == "" {
-			res, err := slack.Post(token, g.Channel, text, attachments)
-			sendErr = err
-			if err == nil {
-				channelID, ts = res.Channel, res.TS
-			}
-		} else {
-			channelID, ts = g.SlackChannelID, g.SlackTS
-			sendErr = slack.Update(token, g.SlackChannelID, g.SlackTS, text, attachments)
-		}
-
-		if sendErr != nil {
-			log.Printf("flush worker: failed to send group %s to %s: %v", g.GroupKey, g.Channel, sendErr)
-			if err := db.FinalizeGroupFailed(ctx, pool, g.GroupKey, g.Attempts, sendErr); err != nil {
-				log.Printf("flush worker: failed to mark group %s failed: %v", g.GroupKey, err)
-			}
+	var sendErr error
+	for _, b := range buckets {
+		if !bucketChanged(b) {
 			continue
 		}
 
-		if err := db.FinalizeGroupSent(ctx, pool, g.GroupKey, channelID, ts, fullyResolved); err != nil {
-			log.Printf("flush worker: failed to finalize group %s: %v", g.GroupKey, err)
+		text, attachments := RenderBucketMessage(g.Team, b.members)
+
+		if b.ts == "" {
+			res, err := slack.Post(token, g.Channel, text, attachments)
+			if err != nil {
+				log.Printf("flush worker: failed to send group %s (bucket of %d) to %s: %v", g.GroupKey, len(b.members), g.Channel, err)
+				sendErr = err
+				continue
+			}
+			b.channelID, b.ts = res.Channel, res.TS
+		} else if err := slack.Update(token, b.channelID, b.ts, text, attachments); err != nil {
+			log.Printf("flush worker: failed to update group %s (bucket ts=%s) on %s: %v", g.GroupKey, b.ts, g.Channel, err)
+			sendErr = err
+			continue
+		}
+
+		for _, m := range b.members {
+			updated := g.Members[m.Fingerprint]
+			updated.NotifiedChannel = b.channelID
+			updated.NotifiedTS = b.ts
+			updated.NotifiedStatus = updated.Status
+			g.Members[m.Fingerprint] = updated
 		}
 	}
+
+	if sendErr != nil {
+		if err := db.SaveGroupProgressFailed(ctx, pool, g.GroupKey, g.Members, g.Attempts, sendErr); err != nil {
+			log.Printf("flush worker: failed to save failed progress for group %s: %v", g.GroupKey, err)
+		}
+		return
+	}
+
+	done := g.AllResolved() && allNotifiedCurrent(g.Members)
+	if err := db.SaveGroupProgress(ctx, pool, g.GroupKey, g.Members, done); err != nil {
+		log.Printf("flush worker: failed to save progress for group %s: %v", g.GroupKey, err)
+	}
+}
+
+func allNotifiedCurrent(members map[string]db.GroupMember) bool {
+	for _, m := range members {
+		if m.NotifiedTS == "" || m.NotifiedStatus != m.Status {
+			return false
+		}
+	}
+	return true
 }

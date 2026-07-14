@@ -14,7 +14,7 @@ import (
 // used once to import them into the DB on first boot (see
 // db.SeedWorkflowRulesFromYAML). The free-form message/attachment
 // templates are intentionally dropped: the Slack layout is now fixed in
-// code (see RenderGroupMessage). Only the structural bits - match labels,
+// code (see RenderBucketMessage). Only the structural bits - match labels,
 // channel, a best-effort "target" label, and enrichments - are carried
 // over; Team and GroupBy are new fields with no YAML equivalent, so they
 // come through blank and are meant to be filled in from the web UI.
