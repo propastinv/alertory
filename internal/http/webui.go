@@ -101,21 +101,23 @@ func rulesListHandler(pool *pgxpool.Pool, tmpl *template.Template) http.Handler 
 }
 
 type ruleFormData struct {
-	Active      string
-	User        string
-	CSRFToken   string
-	FormAction  string
-	Submit      string
-	ID          int64
-	Name        string
-	Channel     string
-	Team        string
-	TargetLabel string
-	MatchLabels string
-	GroupBy     string
-	ExtraFields string
-	Enrichments string
-	Enabled     bool
+	Active           string
+	User             string
+	CSRFToken        string
+	FormAction       string
+	Submit           string
+	ID               int64
+	Name             string
+	Channel          string
+	Team             string
+	TargetLabel      string
+	MatchLabels      string
+	GroupBy          string
+	ExtraFields      string
+	Enrichments      string
+	Enabled          bool
+	DisplayTitle     string
+	NotificationOnly bool
 }
 
 func newRuleFormHandler(tmpl *template.Template) http.Handler {
@@ -151,21 +153,23 @@ func editRuleFormHandler(pool *pgxpool.Pool, tmpl *template.Template) http.Handl
 		}
 
 		renderPage(w, tmpl, ruleFormData{
-			Active:      "rules",
-			User:        currentUser(r),
-			CSRFToken:   csrfToken(r),
-			FormAction:  fmt.Sprintf("/rules/%d", id),
-			Submit:      "Save changes",
-			ID:          id,
-			Name:        rule.Name,
-			Channel:     rule.Channel,
-			Team:        rule.Team,
-			TargetLabel: rule.TargetLabel,
-			MatchLabels: formatLabels(rule.MatchLabels),
-			GroupBy:     strings.Join(rule.GroupBy, ", "),
-			ExtraFields: formatFieldList(rule.ExtraFields),
-			Enrichments: formatEnrichments(rule.Enrichments),
-			Enabled:     rule.Enabled,
+			Active:           "rules",
+			User:             currentUser(r),
+			CSRFToken:        csrfToken(r),
+			FormAction:       fmt.Sprintf("/rules/%d", id),
+			Submit:           "Save changes",
+			ID:               id,
+			Name:             rule.Name,
+			Channel:          rule.Channel,
+			Team:             rule.Team,
+			TargetLabel:      rule.TargetLabel,
+			MatchLabels:      formatLabels(rule.MatchLabels),
+			GroupBy:          strings.Join(rule.GroupBy, ", "),
+			ExtraFields:      formatFieldList(rule.ExtraFields),
+			Enrichments:      formatEnrichments(rule.Enrichments),
+			Enabled:          rule.Enabled,
+			DisplayTitle:     rule.DisplayTitle,
+			NotificationOnly: rule.NotificationOnly,
 		})
 	})
 }
@@ -195,16 +199,18 @@ func saveRuleHandler(pool *pgxpool.Pool) http.Handler {
 		}
 
 		rule := db.WorkflowRule{
-			ID:          id,
-			Name:        strings.TrimSpace(r.FormValue("name")),
-			Channel:     strings.TrimSpace(r.FormValue("channel")),
-			Team:        strings.TrimSpace(r.FormValue("team")),
-			TargetLabel: strings.TrimSpace(r.FormValue("target_label")),
-			MatchLabels: parseLabels(r.FormValue("match_labels")),
-			GroupBy:     parseCSV(r.FormValue("group_by")),
-			ExtraFields: parseFieldList(r.FormValue("extra_fields")),
-			Enrichments: enrichments,
-			Enabled:     r.FormValue("enabled") == "on",
+			ID:               id,
+			Name:             strings.TrimSpace(r.FormValue("name")),
+			Channel:          strings.TrimSpace(r.FormValue("channel")),
+			Team:             strings.TrimSpace(r.FormValue("team")),
+			TargetLabel:      strings.TrimSpace(r.FormValue("target_label")),
+			MatchLabels:      parseLabels(r.FormValue("match_labels")),
+			GroupBy:          parseCSV(r.FormValue("group_by")),
+			ExtraFields:      parseFieldList(r.FormValue("extra_fields")),
+			Enrichments:      enrichments,
+			Enabled:          r.FormValue("enabled") == "on",
+			DisplayTitle:     strings.TrimSpace(r.FormValue("display_title")),
+			NotificationOnly: r.FormValue("notification_only") == "on",
 		}
 
 		if rule.Name == "" || rule.Channel == "" {

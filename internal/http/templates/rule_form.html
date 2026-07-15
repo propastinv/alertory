@@ -57,6 +57,19 @@
     <p class="text-xs text-slate-400 mt-1">Optional HTTP lookups run before an alert is grouped. Leave empty for none.</p>
   </div>
 
+  <div>
+    <label class="block text-sm font-medium mb-1">Display title</label>
+    <input name="display_title" value="{{.DisplayTitle}}" placeholder="e.g. brackets-tagged"
+           class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
+    <p class="text-xs text-slate-400 mt-1">Overrides the alertname as the Slack message header. Leave empty to use alertname.</p>
+  </div>
+
+  <label class="flex items-center gap-2 text-sm">
+    <input type="checkbox" name="notification_only" {{if .NotificationOnly}}checked{{end}} class="rounded border-slate-300">
+    Notification only
+  </label>
+  <p class="text-xs text-slate-400 -mt-3">For sources that aren't real stateful alerts (e.g. forwarded emails): no "resolved" state, no color flip, no Starts/Resolved At timestamps - just sent once as-is.</p>
+
   <label class="flex items-center gap-2 text-sm">
     <input type="checkbox" name="enabled" {{if .Enabled}}checked{{end}} class="rounded border-slate-300">
     Enabled

@@ -27,31 +27,56 @@ func truncateValue(v string, max int) string {
 	return string(r[:max]) + "…"
 }
 
+// GroupStyle is the rule-level rendering config snapshotted onto a group
+// (see db.GroupInfo) - the bits that shape a message but aren't
+// per-member data.
+type GroupStyle struct {
+	Team         string
+	DisplayTitle string
+	// NotificationOnly means these members aren't real alerts with a
+	// firing/resolved lifecycle (e.g. forwarded emails) - so the message
+	// never shows a "RESOLVED" transition, a resolved color, or
+	// Starts/Resolved At timestamps, since none of that means anything
+	// for a one-shot notification.
+	NotificationOnly bool
+}
+
 // RenderBucketMessage renders the Slack content for one message bucket. A
 // single alert (the default, "one alert = one message" case) gets the
 // detailed per-alert layout; more than one alert in a bucket only happens
 // when a burst tripped the mass threshold, and gets the condensed summary
 // layout instead.
-func RenderBucketMessage(team string, members []db.GroupMember) (string, []slack.Attachment) {
+func RenderBucketMessage(style GroupStyle, members []db.GroupMember) (string, []slack.Attachment) {
 	if len(members) == 1 {
-		return renderIndividual(team, members[0])
+		return renderIndividual(style, members[0])
 	}
-	return renderBatch(team, members)
+	return renderBatch(style, members)
 }
 
-func renderIndividual(team string, m db.GroupMember) (string, []slack.Attachment) {
-	color, title := statusStyle(m.Status, m.Alertname)
+func renderIndividual(style GroupStyle, m db.GroupMember) (string, []slack.Attachment) {
+	title := m.Alertname
+	if style.DisplayTitle != "" {
+		title = style.DisplayTitle
+	}
+
+	color := "#e01e5a"
+	if !style.NotificationOnly && m.Status == "resolved" {
+		color = "#2eb67d"
+		title = "RESOLVED: " + title
+	}
 
 	var fields []slack.Field
-	if team != "" {
-		fields = append(fields, slack.Field{Title: "Team", Value: team, Short: true})
+	if style.Team != "" {
+		fields = append(fields, slack.Field{Title: "Team", Value: style.Team, Short: true})
 	}
 	if m.Target != "" {
 		fields = append(fields, slack.Field{Title: "Target", Value: m.Target, Short: true})
 	}
-	fields = append(fields, slack.Field{Title: "Starts At", Value: m.StartsAt.Format(time.RFC3339), Short: true})
-	if m.Status == "resolved" && m.EndsAt != nil {
-		fields = append(fields, slack.Field{Title: "Resolved At", Value: m.EndsAt.Format(time.RFC3339), Short: true})
+	if !style.NotificationOnly {
+		fields = append(fields, slack.Field{Title: "Starts At", Value: m.StartsAt.Format(time.RFC3339), Short: true})
+		if m.Status == "resolved" && m.EndsAt != nil {
+			fields = append(fields, slack.Field{Title: "Resolved At", Value: m.EndsAt.Format(time.RFC3339), Short: true})
+		}
 	}
 	for _, f := range m.DisplayFields {
 		fields = append(fields, slack.Field{Title: f.Title, Value: f.Value})
@@ -60,7 +85,7 @@ func renderIndividual(team string, m db.GroupMember) (string, []slack.Attachment
 	return "", []slack.Attachment{{Color: color, Title: title, Fields: fields}}
 }
 
-func renderBatch(team string, members []db.GroupMember) (string, []slack.Attachment) {
+func renderBatch(style GroupStyle, members []db.GroupMember) (string, []slack.Attachment) {
 	sort.Slice(members, func(i, j int) bool { return members[i].StartsAt.Before(members[j].StartsAt) })
 
 	firing, resolved := 0, 0
@@ -86,17 +111,27 @@ func renderBatch(team string, members []db.GroupMember) (string, []slack.Attachm
 		}
 	}
 
-	allResolved := firing == 0 && len(members) > 0
-	status := "firing"
-	if allResolved {
-		status = "resolved"
+	title := joinSorted(alertnames)
+	if style.DisplayTitle != "" {
+		title = style.DisplayTitle
 	}
-	color, title := statusStyle(status, joinSorted(alertnames))
-	title = fmt.Sprintf("%s (%d firing, %d resolved)", title, firing, resolved)
+
+	color := "#e01e5a"
+	allResolved := firing == 0 && len(members) > 0
+
+	if style.NotificationOnly {
+		title = fmt.Sprintf("%s (%d)", title, len(members))
+	} else {
+		if allResolved {
+			color = "#2eb67d"
+			title = "RESOLVED: " + title
+		}
+		title = fmt.Sprintf("%s (%d firing, %d resolved)", title, firing, resolved)
+	}
 
 	var fields []slack.Field
-	if team != "" {
-		fields = append(fields, slack.Field{Title: "Team", Value: team, Short: true})
+	if style.Team != "" {
+		fields = append(fields, slack.Field{Title: "Team", Value: style.Team, Short: true})
 	}
 	switch len(targets) {
 	case 0:
@@ -106,14 +141,16 @@ func renderBatch(team string, members []db.GroupMember) (string, []slack.Attachm
 	default:
 		fields = append(fields, slack.Field{Title: "Targets", Value: fmt.Sprintf("%d affected", len(targets)), Short: true})
 	}
-	if !earliestStart.IsZero() {
-		fields = append(fields, slack.Field{Title: "Starts At", Value: earliestStart.Format(time.RFC3339), Short: true})
-	}
-	if allResolved && !latestEnd.IsZero() {
-		fields = append(fields, slack.Field{Title: "Resolved At", Value: latestEnd.Format(time.RFC3339), Short: true})
+	if !style.NotificationOnly {
+		if !earliestStart.IsZero() {
+			fields = append(fields, slack.Field{Title: "Starts At", Value: earliestStart.Format(time.RFC3339), Short: true})
+		}
+		if allResolved && !latestEnd.IsZero() {
+			fields = append(fields, slack.Field{Title: "Resolved At", Value: latestEnd.Format(time.RFC3339), Short: true})
+		}
 	}
 
-	if lines := memberLines(members); len(lines) > 0 {
+	if lines := memberLines(members, style.NotificationOnly); len(lines) > 0 {
 		fields = append(fields, slack.Field{
 			Title: fmt.Sprintf("Alerts (%d)", len(members)),
 			Value: strings.Join(lines, "\n"),
@@ -123,14 +160,7 @@ func renderBatch(team string, members []db.GroupMember) (string, []slack.Attachm
 	return "", []slack.Attachment{{Color: color, Title: title, Fields: fields}}
 }
 
-func statusStyle(status, title string) (color, renderedTitle string) {
-	if status == "resolved" {
-		return "#2eb67d", "RESOLVED: " + title
-	}
-	return "#e01e5a", title
-}
-
-func memberLines(members []db.GroupMember) []string {
+func memberLines(members []db.GroupMember, notificationOnly bool) []string {
 	var lines []string
 	for i, m := range members {
 		if i >= maxMemberLines {
@@ -141,7 +171,7 @@ func memberLines(members []db.GroupMember) []string {
 		if label == "" {
 			label = m.Alertname
 		}
-		if m.Status == "resolved" {
+		if !notificationOnly && m.Status == "resolved" {
 			label += " (resolved)"
 		}
 		lines = append(lines, label)

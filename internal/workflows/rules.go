@@ -29,8 +29,21 @@ func ProcessAlert(ctx context.Context, pool *pgxpool.Pool, rules []db.WorkflowRu
 			continue
 		}
 
-		if len(rule.Enrichments) > 0 && isNew && alert.Status == "firing" {
+		// A notification-only rule (e.g. forwarded emails pushed through
+		// this same webhook) isn't a real alert with a lifecycle - there's
+		// no "resolved" for an email that already arrived. Enrichment runs
+		// on every new event rather than gating on status=="firing", and
+		// the member's status is forced to "resolved" immediately so it's
+		// treated as a one-and-done event: sent once, never expected to
+		// change, and cleaned up right after.
+		shouldEnrich := isNew && (alert.Status == "firing" || rule.NotificationOnly)
+		if len(rule.Enrichments) > 0 && shouldEnrich {
 			enrichAlert(&alert, rule.Enrichments)
+		}
+
+		status := alert.Status
+		if rule.NotificationOnly {
+			status = "resolved"
 		}
 
 		target := ""
@@ -41,7 +54,7 @@ func ProcessAlert(ctx context.Context, pool *pgxpool.Pool, rules []db.WorkflowRu
 		member := db.GroupMember{
 			Fingerprint:   alert.Fingerprint,
 			Alertname:     alert.Alertname,
-			Status:        alert.Status,
+			Status:        status,
 			Target:        target,
 			DisplayFields: resolveDisplayFields(rule.ExtraFields, alert.Annotations),
 			StartsAt:      alert.StartsAt,
@@ -49,9 +62,16 @@ func ProcessAlert(ctx context.Context, pool *pgxpool.Pool, rules []db.WorkflowRu
 			UpdatedAt:     time.Now(),
 		}
 
-		groupKey := computeGroupKey(rule, alert.Labels)
+		info := db.GroupInfo{
+			GroupKey:         computeGroupKey(rule, alert.Labels),
+			RuleName:         rule.Name,
+			Channel:          rule.Channel,
+			Team:             rule.Team,
+			DisplayTitle:     rule.DisplayTitle,
+			NotificationOnly: rule.NotificationOnly,
+		}
 
-		if err := db.UpsertGroupMember(ctx, pool, groupKey, rule.Name, rule.Channel, rule.Team, member, debounceWindow, maxGroupWindow); err != nil {
+		if err := db.UpsertGroupMember(ctx, pool, info, member, debounceWindow, maxGroupWindow); err != nil {
 			log.Printf("failed to upsert alert group member (rule=%s fingerprint=%s): %v", rule.Name, alert.Fingerprint, err)
 		}
 	}

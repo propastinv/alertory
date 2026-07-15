@@ -63,6 +63,7 @@ func flushDueGroups(ctx context.Context, pool *pgxpool.Pool) {
 // sent, so a quiet group produces zero Slack calls.
 func processGroup(ctx context.Context, pool *pgxpool.Pool, token string, g db.AlertGroup) {
 	buckets := buildBuckets(g.Members, massThreshold)
+	style := GroupStyle{Team: g.Team, DisplayTitle: g.DisplayTitle, NotificationOnly: g.NotificationOnly}
 
 	var sendErr error
 	for _, b := range buckets {
@@ -70,7 +71,7 @@ func processGroup(ctx context.Context, pool *pgxpool.Pool, token string, g db.Al
 			continue
 		}
 
-		text, attachments := RenderBucketMessage(g.Team, b.members)
+		text, attachments := RenderBucketMessage(style, b.members)
 
 		if b.ts == "" {
 			res, err := slack.Post(token, g.Channel, text, attachments)

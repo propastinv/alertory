@@ -54,6 +54,16 @@ type WorkflowRule struct {
 	ExtraFields []RuleField
 	Enrichments []Enrichment
 	Enabled     bool
+
+	// DisplayTitle, if set, replaces the alertname label as the Slack
+	// message header. Meant for sources that aren't really "alerts" (e.g.
+	// forwarded emails) and don't send a meaningful alertname.
+	DisplayTitle string
+	// NotificationOnly marks a rule as a one-shot notification rather than
+	// a stateful alert: incoming status is ignored, there's no "resolved"
+	// transition, and the message never flips color or shows a resolved
+	// time.
+	NotificationOnly bool
 }
 
 // Matches reports whether the given alert labels satisfy every label
@@ -67,7 +77,7 @@ func (r WorkflowRule) Matches(labels map[string]string) bool {
 	return true
 }
 
-const ruleColumns = `id, name, match_labels, channel, team, target_label, group_by, extra_fields, enrichments, enabled`
+const ruleColumns = `id, name, match_labels, channel, team, target_label, group_by, extra_fields, enrichments, enabled, display_title, notification_only`
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -77,7 +87,7 @@ func scanWorkflowRule(row rowScanner) (WorkflowRule, error) {
 	var r WorkflowRule
 	var matchLabelsJSON, groupByJSON, extraFieldsJSON, enrichmentsJSON []byte
 
-	err := row.Scan(&r.ID, &r.Name, &matchLabelsJSON, &r.Channel, &r.Team, &r.TargetLabel, &groupByJSON, &extraFieldsJSON, &enrichmentsJSON, &r.Enabled)
+	err := row.Scan(&r.ID, &r.Name, &matchLabelsJSON, &r.Channel, &r.Team, &r.TargetLabel, &groupByJSON, &extraFieldsJSON, &enrichmentsJSON, &r.Enabled, &r.DisplayTitle, &r.NotificationOnly)
 	if err != nil {
 		return r, err
 	}
@@ -168,19 +178,25 @@ func UpsertWorkflowRule(ctx context.Context, pool *pgxpool.Pool, r WorkflowRule)
 
 	if r.ID == 0 {
 		_, err := pool.Exec(ctx, `
-			INSERT INTO workflow_rules (name, match_labels, channel, team, target_label, group_by, extra_fields, enrichments, enabled, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+			INSERT INTO workflow_rules (
+			  name, match_labels, channel, team, target_label, group_by,
+			  extra_fields, enrichments, enabled, display_title, notification_only, updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
 			ON CONFLICT (name) DO UPDATE SET
-			  match_labels = EXCLUDED.match_labels,
-			  channel      = EXCLUDED.channel,
-			  team         = EXCLUDED.team,
-			  target_label = EXCLUDED.target_label,
-			  group_by     = EXCLUDED.group_by,
-			  extra_fields = EXCLUDED.extra_fields,
-			  enrichments  = EXCLUDED.enrichments,
-			  enabled      = EXCLUDED.enabled,
-			  updated_at   = now()
-		`, r.Name, string(matchLabelsJSON), r.Channel, r.Team, r.TargetLabel, string(groupByJSON), string(extraFieldsJSON), string(enrichmentsJSON), r.Enabled)
+			  match_labels      = EXCLUDED.match_labels,
+			  channel           = EXCLUDED.channel,
+			  team              = EXCLUDED.team,
+			  target_label      = EXCLUDED.target_label,
+			  group_by          = EXCLUDED.group_by,
+			  extra_fields      = EXCLUDED.extra_fields,
+			  enrichments       = EXCLUDED.enrichments,
+			  enabled           = EXCLUDED.enabled,
+			  display_title     = EXCLUDED.display_title,
+			  notification_only = EXCLUDED.notification_only,
+			  updated_at        = now()
+		`, r.Name, string(matchLabelsJSON), r.Channel, r.Team, r.TargetLabel, string(groupByJSON),
+			string(extraFieldsJSON), string(enrichmentsJSON), r.Enabled, r.DisplayTitle, r.NotificationOnly)
 		return err
 	}
 
@@ -188,9 +204,11 @@ func UpsertWorkflowRule(ctx context.Context, pool *pgxpool.Pool, r WorkflowRule)
 		UPDATE workflow_rules SET
 		  name = $2, match_labels = $3, channel = $4, team = $5,
 		  target_label = $6, group_by = $7, extra_fields = $8, enrichments = $9, enabled = $10,
+		  display_title = $11, notification_only = $12,
 		  updated_at = now()
 		WHERE id = $1
-	`, r.ID, r.Name, string(matchLabelsJSON), r.Channel, r.Team, r.TargetLabel, string(groupByJSON), string(extraFieldsJSON), string(enrichmentsJSON), r.Enabled)
+	`, r.ID, r.Name, string(matchLabelsJSON), r.Channel, r.Team, r.TargetLabel, string(groupByJSON),
+		string(extraFieldsJSON), string(enrichmentsJSON), r.Enabled, r.DisplayTitle, r.NotificationOnly)
 	return err
 }
 

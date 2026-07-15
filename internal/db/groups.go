@@ -53,12 +53,27 @@ type GroupMember struct {
 // actual Slack messages that turns into is decided per-flush from the
 // members' notified state (see workflows.buildBuckets).
 type AlertGroup struct {
-	GroupKey string
-	RuleName string
-	Channel  string
-	Team     string
-	Members  map[string]GroupMember
-	Attempts int
+	GroupKey         string
+	RuleName         string
+	Channel          string
+	Team             string
+	DisplayTitle     string
+	NotificationOnly bool
+	Members          map[string]GroupMember
+	Attempts         int
+}
+
+// GroupInfo is the rule-level data snapshotted onto a group the first time
+// an alert creates it. It's fixed at creation and never updated by later
+// members joining the same group (see UpsertGroupMember), so a rule edited
+// mid-flight can't produce an inconsistent half-old-half-new message.
+type GroupInfo struct {
+	GroupKey         string
+	RuleName         string
+	Channel          string
+	Team             string
+	DisplayTitle     string
+	NotificationOnly bool
 }
 
 func (g AlertGroup) AllResolved() bool {
@@ -85,7 +100,7 @@ func (g AlertGroup) AllResolved() bool {
 // absent from its JSON - so merging preserves whatever notification
 // bookkeeping already existed instead of wiping it out every time an
 // alert's status changes.
-func UpsertGroupMember(ctx context.Context, pool *pgxpool.Pool, groupKey, ruleName, channel, team string, member GroupMember, debounce, maxWindow time.Duration) error {
+func UpsertGroupMember(ctx context.Context, pool *pgxpool.Pool, info GroupInfo, member GroupMember, debounce, maxWindow time.Duration) error {
 	memberJSON, err := json.Marshal(member)
 	if err != nil {
 		return err
@@ -96,26 +111,27 @@ func UpsertGroupMember(ctx context.Context, pool *pgxpool.Pool, groupKey, ruleNa
 
 	_, err = pool.Exec(ctx, `
 		INSERT INTO alert_groups (
-		  group_key, rule_name, channel, team, members,
+		  group_key, rule_name, channel, team, display_title, notification_only, members,
 		  dirty, first_event_at, flush_after, max_flush_by, updated_at
 		)
 		VALUES (
-		  $1, $2, $3, $4, jsonb_build_object($5::text, $6::jsonb),
-		  true, now(), now() + $7::interval, now() + $8::interval, now()
+		  $1, $2, $3, $4, $5, $6, jsonb_build_object($7::text, $8::jsonb),
+		  true, now(), now() + $9::interval, now() + $10::interval, now()
 		)
 		ON CONFLICT (group_key) DO UPDATE SET
 		  members = jsonb_set(
 		    alert_groups.members,
-		    ARRAY[$5::text],
-		    COALESCE(alert_groups.members -> $5::text, '{}'::jsonb) || $6::jsonb,
+		    ARRAY[$7::text],
+		    COALESCE(alert_groups.members -> $7::text, '{}'::jsonb) || $8::jsonb,
 		    true
 		  ),
 		  dirty       = true,
 		  attempts    = 0,
 		  last_error  = NULL,
-		  flush_after = LEAST(now() + $7::interval, alert_groups.max_flush_by),
+		  flush_after = LEAST(now() + $9::interval, alert_groups.max_flush_by),
 		  updated_at  = now()
-	`, groupKey, ruleName, channel, team, member.Fingerprint, string(memberJSON), debounceItv, maxItv)
+	`, info.GroupKey, info.RuleName, info.Channel, info.Team, info.DisplayTitle, info.NotificationOnly,
+		member.Fingerprint, string(memberJSON), debounceItv, maxItv)
 
 	return err
 }
@@ -134,7 +150,7 @@ func ClaimDueGroups(ctx context.Context, pool *pgxpool.Pool, limit int, lease ti
 	defer tx.Rollback(ctx)
 
 	rows, err := tx.Query(ctx, `
-		SELECT group_key, rule_name, channel, team, members, attempts
+		SELECT group_key, rule_name, channel, team, display_title, notification_only, members, attempts
 		FROM alert_groups
 		WHERE dirty AND flush_after <= now()
 		ORDER BY flush_after
@@ -151,7 +167,7 @@ func ClaimDueGroups(ctx context.Context, pool *pgxpool.Pool, limit int, lease ti
 		var g AlertGroup
 		var membersJSON []byte
 
-		if err := rows.Scan(&g.GroupKey, &g.RuleName, &g.Channel, &g.Team, &membersJSON, &g.Attempts); err != nil {
+		if err := rows.Scan(&g.GroupKey, &g.RuleName, &g.Channel, &g.Team, &g.DisplayTitle, &g.NotificationOnly, &membersJSON, &g.Attempts); err != nil {
 			rows.Close()
 			return nil, err
 		}

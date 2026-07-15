@@ -101,6 +101,8 @@ CREATE TABLE IF NOT EXISTS alert_groups (
   rule_name        TEXT NOT NULL,
   channel          TEXT NOT NULL,
   team             TEXT,
+  display_title       TEXT NOT NULL DEFAULT '',
+  notification_only   BOOLEAN NOT NULL DEFAULT false,
 
   members          JSONB NOT NULL DEFAULT '{}',
 
@@ -122,6 +124,14 @@ ALTER TABLE alert_groups DROP COLUMN IF EXISTS slack_channel_id;
 `,
 		`
 ALTER TABLE alert_groups DROP COLUMN IF EXISTS slack_ts;
+`,
+		// Upgrade path for anything already running an earlier version of
+		// this table, from before "notification-only" rules existed.
+		`
+ALTER TABLE alert_groups ADD COLUMN IF NOT EXISTS display_title TEXT NOT NULL DEFAULT '';
+`,
+		`
+ALTER TABLE alert_groups ADD COLUMN IF NOT EXISTS notification_only BOOLEAN NOT NULL DEFAULT false;
 `,
 		// The flush worker polls exactly this shape: unflushed, due rows.
 		`
@@ -159,6 +169,20 @@ CREATE TABLE IF NOT EXISTS workflow_rules (
 		// Slack's field/message size limits, pushing everything else out.
 		`
 ALTER TABLE workflow_rules ADD COLUMN IF NOT EXISTS extra_fields JSONB NOT NULL DEFAULT '[]';
+`,
+		// display_title/notification_only are for rules that aren't really
+		// "alerts" with a firing/resolved lifecycle at all - e.g. forwarded
+		// emails pushed through this same webhook as one-shot
+		// notifications. display_title, if set, replaces the alertname
+		// label in the Slack header (since these sources often don't send
+		// a meaningful alertname); notification_only makes the rule ignore
+		// whatever status it's sent and never render a "RESOLVED"
+		// transition, since there isn't one.
+		`
+ALTER TABLE workflow_rules ADD COLUMN IF NOT EXISTS display_title TEXT NOT NULL DEFAULT '';
+`,
+		`
+ALTER TABLE workflow_rules ADD COLUMN IF NOT EXISTS notification_only BOOLEAN NOT NULL DEFAULT false;
 `,
 		// web_sessions backs the web UI's login state (see internal/auth).
 		// Sessions are opaque server-side records referenced by a random
