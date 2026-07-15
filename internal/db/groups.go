@@ -36,6 +36,15 @@ type GroupMember struct {
 	EndsAt      *time.Time `json:"ends_at,omitempty"`
 	UpdatedAt   time.Time `json:"updated_at"`
 
+	// DisplayTitle is the rule's display-title setting rendered against
+	// this specific alert's labels/annotations at ingestion time (see
+	// workflows.renderDisplayTitle). Per-member rather than group-level
+	// because a title template like "{{ .Labels.match }}" can produce a
+	// different value for every alert in the same group. Empty means
+	// "no override" - rendering falls back to the group's static title,
+	// then to the alertname.
+	DisplayTitle string `json:"display_title,omitempty"`
+
 	// DisplayFields are pre-resolved (title, value) pairs from the rule's
 	// ExtraFields mapping - not the alert's raw annotations. Only
 	// explicitly mapped, length-capped values ever end up here, so a huge

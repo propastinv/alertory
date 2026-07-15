@@ -51,11 +51,18 @@ func ProcessAlert(ctx context.Context, pool *pgxpool.Pool, rules []db.WorkflowRu
 			target = alert.Labels[rule.TargetLabel]
 		}
 
+		// The rule's DisplayTitle may be a template over the alert's own
+		// data ("{{ .Labels.match }}", "{{ .Annotations.title }}"), so it's
+		// rendered here - after enrichment, per alert - and stored on the
+		// member. A static title renders to itself unchanged.
+		displayTitle := renderDisplayTitle(rule.DisplayTitle, alert)
+
 		member := db.GroupMember{
 			Fingerprint:   alert.Fingerprint,
 			Alertname:     alert.Alertname,
 			Status:        status,
 			Target:        target,
+			DisplayTitle:  displayTitle,
 			DisplayFields: resolveDisplayFields(rule.ExtraFields, alert.Annotations),
 			StartsAt:      alert.StartsAt,
 			EndsAt:        alert.EndsAt,
@@ -67,7 +74,7 @@ func ProcessAlert(ctx context.Context, pool *pgxpool.Pool, rules []db.WorkflowRu
 			RuleName:         rule.Name,
 			Channel:          rule.Channel,
 			Team:             rule.Team,
-			DisplayTitle:     rule.DisplayTitle,
+			DisplayTitle:     displayTitle,
 			NotificationOnly: rule.NotificationOnly,
 		}
 
@@ -204,19 +211,51 @@ func enrichAlert(alert *db.AlertUpsert, enrichments []db.Enrichment) {
 	}
 }
 
+// renderDisplayTitle turns a rule's display-title setting into the final
+// per-alert title. It supports Go templates over the alert's data
+// ("{{ .Labels.match }}", "{{ .Annotations.title }}"), which is what makes
+// a dynamic header possible for sources like forwarded emails where every
+// event shares one alertname but carries its real subject in a
+// label/annotation. Plain static strings pass through unchanged; a broken
+// template or one that renders to nothing falls back to the raw string, so
+// a bad edit in the rule form degrades to an ugly title, never a lost
+// message.
+func renderDisplayTitle(tmpl string, alert db.AlertUpsert) string {
+	if tmpl == "" || !strings.Contains(tmpl, "{{") {
+		return tmpl
+	}
+	rendered, err := renderAlertTemplate(tmpl, alert.Labels, alert.Annotations)
+	if err != nil {
+		log.Printf("display title template %q: %v", tmpl, err)
+		return tmpl
+	}
+	rendered = strings.TrimSpace(rendered)
+	if rendered == "" || rendered == "<no value>" {
+		return tmpl
+	}
+	return truncateValue(rendered, maxFieldValueLen)
+}
+
 type labelTemplateData struct {
-	Labels map[string]string
+	Labels      map[string]string
+	Annotations map[string]string
 }
 
 // renderLabelTemplate supports the same "{{ .Labels.NAME }}" templates the
 // old YAML rules used for enrichment URLs/params.
 func renderLabelTemplate(tmpl string, labels map[string]string) (string, error) {
+	return renderAlertTemplate(tmpl, labels, nil)
+}
+
+// renderAlertTemplate renders "{{ .Labels.NAME }}" / "{{ .Annotations.NAME }}"
+// templates against a single alert's data.
+func renderAlertTemplate(tmpl string, labels, annotations map[string]string) (string, error) {
 	t, err := template.New("t").Parse(tmpl)
 	if err != nil {
 		return "", err
 	}
 	var buf bytes.Buffer
-	if err := t.Execute(&buf, labelTemplateData{Labels: labels}); err != nil {
+	if err := t.Execute(&buf, labelTemplateData{Labels: labels, Annotations: annotations}); err != nil {
 		return "", err
 	}
 	return buf.String(), nil

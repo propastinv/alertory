@@ -54,10 +54,7 @@ func RenderBucketMessage(style GroupStyle, members []db.GroupMember) (string, []
 }
 
 func renderIndividual(style GroupStyle, m db.GroupMember) (string, []slack.Attachment) {
-	title := m.Alertname
-	if style.DisplayTitle != "" {
-		title = style.DisplayTitle
-	}
+	title := memberTitle(style, m)
 
 	color := "#e01e5a"
 	if !style.NotificationOnly && m.Status == "resolved" {
@@ -90,11 +87,11 @@ func renderBatch(style GroupStyle, members []db.GroupMember) (string, []slack.At
 
 	firing, resolved := 0, 0
 	var earliestStart, latestEnd time.Time
-	alertnames := map[string]bool{}
+	titles := map[string]bool{}
 	targets := map[string]bool{}
 
 	for _, m := range members {
-		alertnames[m.Alertname] = true
+		titles[memberTitle(style, m)] = true
 		if m.Target != "" {
 			targets[m.Target] = true
 		}
@@ -111,10 +108,7 @@ func renderBatch(style GroupStyle, members []db.GroupMember) (string, []slack.At
 		}
 	}
 
-	title := joinSorted(alertnames)
-	if style.DisplayTitle != "" {
-		title = style.DisplayTitle
-	}
+	title := joinSorted(titles)
 
 	color := "#e01e5a"
 	allResolved := firing == 0 && len(members) > 0
@@ -160,6 +154,19 @@ func renderBatch(style GroupStyle, members []db.GroupMember) (string, []slack.At
 	return "", []slack.Attachment{{Color: color, Title: title, Fields: fields}}
 }
 
+// memberTitle picks the header text for one alert: its own rendered
+// display title if the rule's title template produced one, else the
+// group's static display title, else the alertname.
+func memberTitle(style GroupStyle, m db.GroupMember) string {
+	if m.DisplayTitle != "" {
+		return m.DisplayTitle
+	}
+	if style.DisplayTitle != "" {
+		return style.DisplayTitle
+	}
+	return m.Alertname
+}
+
 func memberLines(members []db.GroupMember, notificationOnly bool) []string {
 	var lines []string
 	for i, m := range members {
@@ -168,6 +175,9 @@ func memberLines(members []db.GroupMember, notificationOnly bool) []string {
 			break
 		}
 		label := m.Target
+		if label == "" && m.DisplayTitle != "" {
+			label = m.DisplayTitle
+		}
 		if label == "" {
 			label = m.Alertname
 		}

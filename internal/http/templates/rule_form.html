@@ -59,9 +59,9 @@
 
   <div>
     <label class="block text-sm font-medium mb-1">Display title</label>
-    <input name="display_title" value="{{.DisplayTitle}}" placeholder="e.g. brackets-tagged"
+    <input name="display_title" value="{{.DisplayTitle}}" placeholder="e.g. {{"{{"}} .Labels.match {{"}}"}}"
            class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
-    <p class="text-xs text-slate-400 mt-1">Overrides the alertname as the Slack message header. Leave empty to use alertname.</p>
+    <p class="text-xs text-slate-400 mt-1">Overrides the alertname as the Slack message header. Static text, or a per-alert template: <code>{{"{{"}} .Labels.NAME {{"}}"}}</code> / <code>{{"{{"}} .Annotations.NAME {{"}}"}}</code>. Leave empty to use alertname.</p>
   </div>
 
   <label class="flex items-center gap-2 text-sm">
