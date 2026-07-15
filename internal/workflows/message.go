@@ -14,6 +14,19 @@ import (
 // message; beyond this we just say how many more there are.
 const maxMemberLines = 20
 
+// maxFieldValueLen caps how long any single extra-field value can be
+// before it's shown in Slack. Even for annotations a rule explicitly opted
+// into, an unexpectedly large value shouldn't be able to break the card.
+const maxFieldValueLen = 400
+
+func truncateValue(v string, max int) string {
+	r := []rune(v)
+	if len(r) <= max {
+		return v
+	}
+	return string(r[:max]) + "…"
+}
+
 // RenderBucketMessage renders the Slack content for one message bucket. A
 // single alert (the default, "one alert = one message" case) gets the
 // detailed per-alert layout; more than one alert in a bucket only happens
@@ -40,8 +53,8 @@ func renderIndividual(team string, m db.GroupMember) (string, []slack.Attachment
 	if m.Status == "resolved" && m.EndsAt != nil {
 		fields = append(fields, slack.Field{Title: "Resolved At", Value: m.EndsAt.Format(time.RFC3339), Short: true})
 	}
-	for _, k := range sortedKeys(m.Annotations) {
-		fields = append(fields, slack.Field{Title: capitalize(k), Value: m.Annotations[k]})
+	for _, f := range m.DisplayFields {
+		fields = append(fields, slack.Field{Title: f.Title, Value: f.Value})
 	}
 
 	return "", []slack.Attachment{{Color: color, Title: icon + " " + title, Fields: fields}}
@@ -135,23 +148,6 @@ func memberLines(members []db.GroupMember) []string {
 		lines = append(lines, statusIcon+" "+label)
 	}
 	return lines
-}
-
-func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func capitalize(s string) string {
-	if s == "" {
-		return s
-	}
-	r := []rune(s)
-	return strings.ToUpper(string(r[0])) + string(r[1:])
 }
 
 func joinSorted(set map[string]bool) string {

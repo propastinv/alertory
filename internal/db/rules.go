@@ -27,12 +27,22 @@ type Enrichment struct {
 	StoreIn       string            `json:"store_in,omitempty"`
 }
 
+// RuleField maps one alert annotation onto a named Slack field, e.g.
+// Title "Email" <- annotation key "email". Only annotations explicitly
+// listed here are shown on the per-alert card; anything else (like a raw
+// email body dumped into an annotation) stays out of Slack entirely.
+type RuleField struct {
+	Title         string `json:"title"`
+	AnnotationKey string `json:"annotation_key"`
+}
+
 // WorkflowRule is the DB-backed replacement for the old free-form YAML
 // rules. The Slack layout itself is now fixed in code (see workflows
 // package); a rule only supplies the structured bits: which alerts it
 // matches, where they go, whose team owns them, which label identifies the
-// affected target, how to collapse mass firings into one message, and any
-// enrichment calls to run first.
+// affected target, which annotations to surface as extra fields, how to
+// collapse mass firings into one message, and any enrichment calls to run
+// first.
 type WorkflowRule struct {
 	ID          int64
 	Name        string
@@ -41,6 +51,7 @@ type WorkflowRule struct {
 	Team        string
 	TargetLabel string
 	GroupBy     []string
+	ExtraFields []RuleField
 	Enrichments []Enrichment
 	Enabled     bool
 }
@@ -56,7 +67,7 @@ func (r WorkflowRule) Matches(labels map[string]string) bool {
 	return true
 }
 
-const ruleColumns = `id, name, match_labels, channel, team, target_label, group_by, enrichments, enabled`
+const ruleColumns = `id, name, match_labels, channel, team, target_label, group_by, extra_fields, enrichments, enabled`
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -64,15 +75,16 @@ type rowScanner interface {
 
 func scanWorkflowRule(row rowScanner) (WorkflowRule, error) {
 	var r WorkflowRule
-	var matchLabelsJSON, groupByJSON, enrichmentsJSON []byte
+	var matchLabelsJSON, groupByJSON, extraFieldsJSON, enrichmentsJSON []byte
 
-	err := row.Scan(&r.ID, &r.Name, &matchLabelsJSON, &r.Channel, &r.Team, &r.TargetLabel, &groupByJSON, &enrichmentsJSON, &r.Enabled)
+	err := row.Scan(&r.ID, &r.Name, &matchLabelsJSON, &r.Channel, &r.Team, &r.TargetLabel, &groupByJSON, &extraFieldsJSON, &enrichmentsJSON, &r.Enabled)
 	if err != nil {
 		return r, err
 	}
 
 	_ = json.Unmarshal(matchLabelsJSON, &r.MatchLabels)
 	_ = json.Unmarshal(groupByJSON, &r.GroupBy)
+	_ = json.Unmarshal(extraFieldsJSON, &r.ExtraFields)
 	_ = json.Unmarshal(enrichmentsJSON, &r.Enrichments)
 
 	return r, nil
@@ -142,38 +154,43 @@ func UpsertWorkflowRule(ctx context.Context, pool *pgxpool.Pool, r WorkflowRule)
 	if r.GroupBy == nil {
 		r.GroupBy = []string{}
 	}
+	if r.ExtraFields == nil {
+		r.ExtraFields = []RuleField{}
+	}
 	if r.Enrichments == nil {
 		r.Enrichments = []Enrichment{}
 	}
 
 	matchLabelsJSON, _ := json.Marshal(r.MatchLabels)
 	groupByJSON, _ := json.Marshal(r.GroupBy)
+	extraFieldsJSON, _ := json.Marshal(r.ExtraFields)
 	enrichmentsJSON, _ := json.Marshal(r.Enrichments)
 
 	if r.ID == 0 {
 		_, err := pool.Exec(ctx, `
-			INSERT INTO workflow_rules (name, match_labels, channel, team, target_label, group_by, enrichments, enabled, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+			INSERT INTO workflow_rules (name, match_labels, channel, team, target_label, group_by, extra_fields, enrichments, enabled, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
 			ON CONFLICT (name) DO UPDATE SET
 			  match_labels = EXCLUDED.match_labels,
 			  channel      = EXCLUDED.channel,
 			  team         = EXCLUDED.team,
 			  target_label = EXCLUDED.target_label,
 			  group_by     = EXCLUDED.group_by,
+			  extra_fields = EXCLUDED.extra_fields,
 			  enrichments  = EXCLUDED.enrichments,
 			  enabled      = EXCLUDED.enabled,
 			  updated_at   = now()
-		`, r.Name, string(matchLabelsJSON), r.Channel, r.Team, r.TargetLabel, string(groupByJSON), string(enrichmentsJSON), r.Enabled)
+		`, r.Name, string(matchLabelsJSON), r.Channel, r.Team, r.TargetLabel, string(groupByJSON), string(extraFieldsJSON), string(enrichmentsJSON), r.Enabled)
 		return err
 	}
 
 	_, err := pool.Exec(ctx, `
 		UPDATE workflow_rules SET
 		  name = $2, match_labels = $3, channel = $4, team = $5,
-		  target_label = $6, group_by = $7, enrichments = $8, enabled = $9,
+		  target_label = $6, group_by = $7, extra_fields = $8, enrichments = $9, enabled = $10,
 		  updated_at = now()
 		WHERE id = $1
-	`, r.ID, r.Name, string(matchLabelsJSON), r.Channel, r.Team, r.TargetLabel, string(groupByJSON), string(enrichmentsJSON), r.Enabled)
+	`, r.ID, r.Name, string(matchLabelsJSON), r.Channel, r.Team, r.TargetLabel, string(groupByJSON), string(extraFieldsJSON), string(enrichmentsJSON), r.Enabled)
 	return err
 }
 

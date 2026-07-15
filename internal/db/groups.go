@@ -9,6 +9,17 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// MemberField is a resolved (title, value) pair ready to render as a
+// Slack field, computed once at ingestion time from a rule's ExtraFields
+// mapping (see workflows.ProcessAlert). Resolving it up front, rather
+// than re-reading the rule's config at flush time, means rendering never
+// depends on the rule still existing/unchanged later, and keeps the value
+// length-capped at the point it's captured.
+type MemberField struct {
+	Title string `json:"title"`
+	Value string `json:"value"`
+}
+
 // GroupMember is the state of a single alert inside an alert_groups row.
 // NotifiedChannel/NotifiedTS identify which Slack message currently
 // represents this alert - by default that's a message of its own; it only
@@ -17,14 +28,20 @@ import (
 // is the alert's Status as of the last successful send/update, used to
 // tell whether its message is still up to date.
 type GroupMember struct {
-	Fingerprint string            `json:"fingerprint"`
-	Alertname   string            `json:"alertname"`
-	Status      string            `json:"status"` // "firing" or "resolved"
-	Target      string            `json:"target,omitempty"`
-	Annotations map[string]string `json:"annotations,omitempty"`
-	StartsAt    time.Time         `json:"starts_at"`
-	EndsAt      *time.Time        `json:"ends_at,omitempty"`
-	UpdatedAt   time.Time         `json:"updated_at"`
+	Fingerprint string    `json:"fingerprint"`
+	Alertname   string    `json:"alertname"`
+	Status      string    `json:"status"` // "firing" or "resolved"
+	Target      string    `json:"target,omitempty"`
+	StartsAt    time.Time `json:"starts_at"`
+	EndsAt      *time.Time `json:"ends_at,omitempty"`
+	UpdatedAt   time.Time `json:"updated_at"`
+
+	// DisplayFields are pre-resolved (title, value) pairs from the rule's
+	// ExtraFields mapping - not the alert's raw annotations. Only
+	// explicitly mapped, length-capped values ever end up here, so a huge
+	// annotation (like a full raw email body) never gets stored or
+	// rendered just because it happened to be present.
+	DisplayFields []MemberField `json:"display_fields,omitempty"`
 
 	NotifiedChannel string `json:"notified_channel,omitempty"`
 	NotifiedTS      string `json:"notified_ts,omitempty"`

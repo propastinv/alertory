@@ -39,14 +39,14 @@ func ProcessAlert(ctx context.Context, pool *pgxpool.Pool, rules []db.WorkflowRu
 		}
 
 		member := db.GroupMember{
-			Fingerprint: alert.Fingerprint,
-			Alertname:   alert.Alertname,
-			Status:      alert.Status,
-			Target:      target,
-			Annotations: alert.Annotations,
-			StartsAt:    alert.StartsAt,
-			EndsAt:      alert.EndsAt,
-			UpdatedAt:   time.Now(),
+			Fingerprint:   alert.Fingerprint,
+			Alertname:     alert.Alertname,
+			Status:        alert.Status,
+			Target:        target,
+			DisplayFields: resolveDisplayFields(rule.ExtraFields, alert.Annotations),
+			StartsAt:      alert.StartsAt,
+			EndsAt:        alert.EndsAt,
+			UpdatedAt:     time.Now(),
 		}
 
 		groupKey := computeGroupKey(rule, alert.Labels)
@@ -55,6 +55,29 @@ func ProcessAlert(ctx context.Context, pool *pgxpool.Pool, rules []db.WorkflowRu
 			log.Printf("failed to upsert alert group member (rule=%s fingerprint=%s): %v", rule.Name, alert.Fingerprint, err)
 		}
 	}
+}
+
+// resolveDisplayFields picks out only the annotations a rule explicitly
+// mapped to a Slack field, and truncates each value. This is deliberately
+// an allow-list rather than "show every annotation": alert sources
+// sometimes stuff large raw payloads (a full email body, a stack trace)
+// into an annotation, and rendering that wholesale as its own field is
+// exactly what broke past cards - it blew past Slack's size limits and
+// silently pushed the fields the rule actually wanted off the message.
+func resolveDisplayFields(fields []db.RuleField, annotations map[string]string) []db.MemberField {
+	if len(fields) == 0 || len(annotations) == 0 {
+		return nil
+	}
+
+	var out []db.MemberField
+	for _, f := range fields {
+		v, ok := annotations[f.AnnotationKey]
+		if !ok || v == "" {
+			continue
+		}
+		out = append(out, db.MemberField{Title: f.Title, Value: truncateValue(v, maxFieldValueLen)})
+	}
+	return out
 }
 
 // computeGroupKey decides which alerts get collapsed into the same Slack

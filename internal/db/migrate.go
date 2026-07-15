@@ -150,6 +150,16 @@ CREATE TABLE IF NOT EXISTS workflow_rules (
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 `,
+		// extra_fields lets a rule pick specific annotations to surface as
+		// their own Slack fields (e.g. "Email" <- annotation "email"),
+		// instead of the per-alert card either omitting annotations or
+		// dumping all of them wholesale - the latter is exactly what broke
+		// alerts whose annotations include a large raw payload (like a full
+		// email body): it got rendered as its own field and blew past
+		// Slack's field/message size limits, pushing everything else out.
+		`
+ALTER TABLE workflow_rules ADD COLUMN IF NOT EXISTS extra_fields JSONB NOT NULL DEFAULT '[]';
+`,
 	}
 
 	for _, stmt := range stmts {

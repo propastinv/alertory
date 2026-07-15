@@ -43,6 +43,13 @@
   </div>
 
   <div>
+    <label class="block text-sm font-medium mb-1">Extra fields</label>
+    <textarea name="extra_fields" rows="3" placeholder="Email=email&#10;Title=title"
+              class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-slate-400">{{.ExtraFields}}</textarea>
+    <p class="text-xs text-slate-400 mt-1">One "Field label=annotation key" per line. Only these annotations are shown on the Slack card - anything else (e.g. a raw email body) stays out.</p>
+  </div>
+
+  <div>
     <label class="block text-sm font-medium mb-1">Enrichments (advanced, JSON)</label>
     <textarea name="enrichments" rows="6" placeholder="[]"
               class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-slate-400">{{.Enrichments}}</textarea>

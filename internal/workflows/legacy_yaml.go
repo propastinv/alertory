@@ -107,9 +107,17 @@ func LoadLegacyYAMLRules(dir string) ([]db.WorkflowRule, error) {
 			rule.Channel = a.Channel
 			for _, att := range a.Attachments {
 				for _, f := range att.Fields {
-					if strings.EqualFold(f.Title, "Target") {
+					switch {
+					case strings.EqualFold(f.Title, "Target"):
 						if label := labelFromTemplate(f.Value); label != "" {
 							rule.TargetLabel = label
+						}
+					case strings.EqualFold(f.Title, "Starts At"), strings.EqualFold(f.Title, "Resolved At"), strings.EqualFold(f.Title, "Team"):
+						// handled automatically / becomes a static rule
+						// field now - nothing to import
+					default:
+						if key := annotationFromTemplate(f.Value); key != "" {
+							rule.ExtraFields = append(rule.ExtraFields, db.RuleField{Title: f.Title, AnnotationKey: key})
 						}
 					}
 				}
@@ -128,7 +136,16 @@ func LoadLegacyYAMLRules(dir string) ([]db.WorkflowRule, error) {
 // labelFromTemplate pulls NAME out of a "{{ .Labels.NAME }}"-shaped string,
 // used only to migrate the old Target field convention.
 func labelFromTemplate(tmpl string) string {
-	const marker = ".Labels."
+	return identAfterMarker(tmpl, ".Labels.")
+}
+
+// annotationFromTemplate pulls NAME out of a "{{ .Annotations.NAME }}"-
+// shaped string, used to migrate old custom fields into ExtraFields.
+func annotationFromTemplate(tmpl string) string {
+	return identAfterMarker(tmpl, ".Annotations.")
+}
+
+func identAfterMarker(tmpl, marker string) string {
 	idx := strings.Index(tmpl, marker)
 	if idx < 0 {
 		return ""

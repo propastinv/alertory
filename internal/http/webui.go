@@ -84,6 +84,7 @@ type ruleFormData struct {
 	TargetLabel string
 	MatchLabels string
 	GroupBy     string
+	ExtraFields string
 	Enrichments string
 	Enabled     bool
 }
@@ -129,6 +130,7 @@ func editRuleFormHandler(pool *pgxpool.Pool, tmpl *template.Template) http.Handl
 			TargetLabel: rule.TargetLabel,
 			MatchLabels: formatLabels(rule.MatchLabels),
 			GroupBy:     strings.Join(rule.GroupBy, ", "),
+			ExtraFields: formatFieldList(rule.ExtraFields),
 			Enrichments: formatEnrichments(rule.Enrichments),
 			Enabled:     rule.Enabled,
 		})
@@ -163,6 +165,7 @@ func saveRuleHandler(pool *pgxpool.Pool) http.Handler {
 			TargetLabel: strings.TrimSpace(r.FormValue("target_label")),
 			MatchLabels: parseLabels(r.FormValue("match_labels")),
 			GroupBy:     parseCSV(r.FormValue("group_by")),
+			ExtraFields: parseFieldList(r.FormValue("extra_fields")),
 			Enrichments: enrichments,
 			Enabled:     r.FormValue("enabled") == "on",
 		}
@@ -265,6 +268,37 @@ func formatLabels(labels map[string]string) string {
 	lines := make([]string, 0, len(keys))
 	for _, k := range keys {
 		lines = append(lines, k+"="+labels[k])
+	}
+	return strings.Join(lines, "\n")
+}
+
+// parseFieldList parses "Title=annotation_key" lines (order preserved,
+// unlike a map) into rule ExtraFields.
+func parseFieldList(raw string) []db.RuleField {
+	var out []db.RuleField
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		title := strings.TrimSpace(parts[0])
+		key := strings.TrimSpace(parts[1])
+		if title == "" || key == "" {
+			continue
+		}
+		out = append(out, db.RuleField{Title: title, AnnotationKey: key})
+	}
+	return out
+}
+
+func formatFieldList(fields []db.RuleField) string {
+	lines := make([]string, 0, len(fields))
+	for _, f := range fields {
+		lines = append(lines, f.Title+"="+f.AnnotationKey)
 	}
 	return strings.Join(lines, "\n")
 }
