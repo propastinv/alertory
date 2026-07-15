@@ -40,7 +40,7 @@ func RenderBucketMessage(team string, members []db.GroupMember) (string, []slack
 }
 
 func renderIndividual(team string, m db.GroupMember) (string, []slack.Attachment) {
-	icon, color, title := statusStyle(m.Status, m.Alertname)
+	color, title := statusStyle(m.Status, m.Alertname)
 
 	var fields []slack.Field
 	if team != "" {
@@ -57,7 +57,7 @@ func renderIndividual(team string, m db.GroupMember) (string, []slack.Attachment
 		fields = append(fields, slack.Field{Title: f.Title, Value: f.Value})
 	}
 
-	return "", []slack.Attachment{{Color: color, Title: icon + " " + title, Fields: fields}}
+	return "", []slack.Attachment{{Color: color, Title: title, Fields: fields}}
 }
 
 func renderBatch(team string, members []db.GroupMember) (string, []slack.Attachment) {
@@ -91,7 +91,7 @@ func renderBatch(team string, members []db.GroupMember) (string, []slack.Attachm
 	if allResolved {
 		status = "resolved"
 	}
-	icon, color, title := statusStyle(status, joinSorted(alertnames))
+	color, title := statusStyle(status, joinSorted(alertnames))
 	title = fmt.Sprintf("%s (%d firing, %d resolved)", title, firing, resolved)
 
 	var fields []slack.Field
@@ -120,14 +120,14 @@ func renderBatch(team string, members []db.GroupMember) (string, []slack.Attachm
 		})
 	}
 
-	return "", []slack.Attachment{{Color: color, Title: icon + " " + title, Fields: fields}}
+	return "", []slack.Attachment{{Color: color, Title: title, Fields: fields}}
 }
 
-func statusStyle(status, title string) (icon, color, renderedTitle string) {
+func statusStyle(status, title string) (color, renderedTitle string) {
 	if status == "resolved" {
-		return ":white_check_mark:", "#2eb67d", "RESOLVED: " + title
+		return "#2eb67d", "RESOLVED: " + title
 	}
-	return ":rotating_light:", "#e01e5a", title
+	return "#e01e5a", title
 }
 
 func memberLines(members []db.GroupMember) []string {
@@ -137,15 +137,14 @@ func memberLines(members []db.GroupMember) []string {
 			lines = append(lines, fmt.Sprintf("...and %d more", len(members)-maxMemberLines))
 			break
 		}
-		statusIcon := "\U0001F525" // fire
-		if m.Status == "resolved" {
-			statusIcon = "✅"
-		}
 		label := m.Target
 		if label == "" {
 			label = m.Alertname
 		}
-		lines = append(lines, statusIcon+" "+label)
+		if m.Status == "resolved" {
+			label += " (resolved)"
+		}
+		lines = append(lines, label)
 	}
 	return lines
 }

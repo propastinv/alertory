@@ -33,6 +33,7 @@
         <td class="px-4 py-2 text-right space-x-3">
           <a href="/rules/{{.ID}}/edit" class="text-slate-600 hover:text-slate-900 text-xs font-medium">Edit</a>
           <form method="post" action="/rules/{{.ID}}/delete" class="inline" onsubmit="return confirm('Delete rule {{.Name}}?');">
+            <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
             <button type="submit" class="text-red-600 hover:text-red-800 text-xs font-medium">Delete</button>
           </form>
         </td>

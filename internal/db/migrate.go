@@ -160,6 +160,26 @@ CREATE TABLE IF NOT EXISTS workflow_rules (
 		`
 ALTER TABLE workflow_rules ADD COLUMN IF NOT EXISTS extra_fields JSONB NOT NULL DEFAULT '[]';
 `,
+		// web_sessions backs the web UI's login state (see internal/auth).
+		// Sessions are opaque server-side records referenced by a random
+		// cookie value, rather than a self-contained signed token, so a
+		// logout (or an admin wiping this table) actually revokes access
+		// immediately instead of waiting out a token's lifetime.
+		`
+CREATE TABLE IF NOT EXISTS web_sessions (
+  id          TEXT PRIMARY KEY,
+  subject     TEXT NOT NULL,
+  email       TEXT NOT NULL DEFAULT '',
+  name        TEXT NOT NULL DEFAULT '',
+  csrf_token  TEXT NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at  TIMESTAMPTZ NOT NULL
+);
+`,
+		`
+CREATE INDEX IF NOT EXISTS idx_web_sessions_expires
+ON web_sessions(expires_at);
+`,
 	}
 
 	for _, stmt := range stmts {

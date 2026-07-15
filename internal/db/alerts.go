@@ -184,7 +184,7 @@ func DeleteOldAlerts(ctx context.Context, pool *pgxpool.Pool, olderThan time.Dur
 // row and every cleanup pass deletes a batch), which is exactly the
 // workload that makes tables bloat between scheduled autovacuum runs.
 func VacuumAnalyze(ctx context.Context, pool *pgxpool.Pool) error {
-	for _, table := range []string{"active_alerts", "alert_events", "alert_groups"} {
+	for _, table := range []string{"active_alerts", "alert_events", "alert_groups", "web_sessions"} {
 		if _, err := pool.Exec(ctx, "VACUUM (ANALYZE) "+table); err != nil {
 			return err
 		}

@@ -13,6 +13,9 @@
     <a href="/" class="text-sm {{if eq .Active "dashboard"}}text-white font-medium{{else}}text-slate-300 hover:text-white{{end}}">Dashboard</a>
     <a href="/rules" class="text-sm {{if eq .Active "rules"}}text-white font-medium{{else}}text-slate-300 hover:text-white{{end}}">Rules</a>
     <a href="/settings" class="text-sm {{if eq .Active "settings"}}text-white font-medium{{else}}text-slate-300 hover:text-white{{end}}">Settings</a>
+    <span class="flex-1"></span>
+    {{if .User}}<span class="text-sm text-slate-400">{{.User}}</span>{{end}}
+    <a href="/auth/logout" class="text-sm text-slate-300 hover:text-white">Log out</a>
   </nav>
   <main class="max-w-5xl mx-auto p-6">
     {{block "content" .}}{{end}}

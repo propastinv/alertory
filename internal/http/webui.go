@@ -13,8 +13,31 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/propastinv/alertory/internal/auth"
 	"github.com/propastinv/alertory/internal/db"
 )
+
+// currentUser returns a display label for the nav bar. Every web UI route
+// is behind auth.RequireAuth, so a missing session here just means "not
+// worth failing the page over" - it renders blank rather than erroring.
+func currentUser(r *http.Request) string {
+	sess, ok := auth.FromContext(r.Context())
+	if !ok {
+		return ""
+	}
+	if sess.Email != "" {
+		return sess.Email
+	}
+	return sess.Name
+}
+
+func csrfToken(r *http.Request) string {
+	sess, ok := auth.FromContext(r.Context())
+	if !ok {
+		return ""
+	}
+	return sess.CSRFToken
+}
 
 func renderPage(w http.ResponseWriter, tmpl *template.Template, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -26,6 +49,7 @@ func renderPage(w http.ResponseWriter, tmpl *template.Template, data any) {
 
 type dashboardData struct {
 	Active       string
+	User         string
 	Alerts       []db.ActiveAlertRow
 	StatusFilter string
 	OpenGroups   int
@@ -50,6 +74,7 @@ func dashboardHandler(pool *pgxpool.Pool, tmpl *template.Template) http.Handler 
 
 		renderPage(w, tmpl, dashboardData{
 			Active:       "dashboard",
+			User:         currentUser(r),
 			Alerts:       alerts,
 			StatusFilter: status,
 			OpenGroups:   openGroups,
@@ -66,15 +91,19 @@ func rulesListHandler(pool *pgxpool.Pool, tmpl *template.Template) http.Handler 
 			return
 		}
 		data := struct {
-			Active string
-			Rules  []db.WorkflowRule
-		}{Active: "rules", Rules: rules}
+			Active    string
+			User      string
+			CSRFToken string
+			Rules     []db.WorkflowRule
+		}{Active: "rules", User: currentUser(r), CSRFToken: csrfToken(r), Rules: rules}
 		renderPage(w, tmpl, data)
 	})
 }
 
 type ruleFormData struct {
 	Active      string
+	User        string
+	CSRFToken   string
 	FormAction  string
 	Submit      string
 	ID          int64
@@ -93,6 +122,8 @@ func newRuleFormHandler(tmpl *template.Template) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		renderPage(w, tmpl, ruleFormData{
 			Active:     "rules",
+			User:       currentUser(r),
+			CSRFToken:  csrfToken(r),
 			FormAction: "/rules",
 			Submit:     "Create rule",
 			Enabled:    true,
@@ -121,6 +152,8 @@ func editRuleFormHandler(pool *pgxpool.Pool, tmpl *template.Template) http.Handl
 
 		renderPage(w, tmpl, ruleFormData{
 			Active:      "rules",
+			User:        currentUser(r),
+			CSRFToken:   csrfToken(r),
 			FormAction:  fmt.Sprintf("/rules/%d", id),
 			Submit:      "Save changes",
 			ID:          id,
@@ -141,6 +174,10 @@ func saveRuleHandler(pool *pgxpool.Pool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
 			http.Error(w, "bad form", http.StatusBadRequest)
+			return
+		}
+		if !auth.CheckCSRF(r) {
+			http.Error(w, "invalid or missing csrf token", http.StatusForbidden)
 			return
 		}
 
@@ -187,6 +224,15 @@ func saveRuleHandler(pool *pgxpool.Pool) http.Handler {
 
 func deleteRuleHandler(pool *pgxpool.Pool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "bad form", http.StatusBadRequest)
+			return
+		}
+		if !auth.CheckCSRF(r) {
+			http.Error(w, "invalid or missing csrf token", http.StatusForbidden)
+			return
+		}
+
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		if err != nil {
 			http.NotFound(w, r)
@@ -218,6 +264,7 @@ func settingsHandler(pool *pgxpool.Pool, tmpl *template.Template) http.Handler {
 
 		data := struct {
 			Active          string
+			User            string
 			Connected       bool
 			TeamName        string
 			AuthorizeURL    string
@@ -225,6 +272,7 @@ func settingsHandler(pool *pgxpool.Pool, tmpl *template.Template) http.Handler {
 			CleanupInterval string
 		}{
 			Active:          "settings",
+			User:            currentUser(r),
 			Connected:       token != "",
 			TeamName:        teamName,
 			AuthorizeURL:    authorizeURL,
