@@ -31,8 +31,7 @@ func truncateValue(v string, max int) string {
 // (see db.GroupInfo) - the bits that shape a message but aren't
 // per-member data.
 type GroupStyle struct {
-	Team         string
-	DisplayTitle string
+	Team string
 	// NotificationOnly means these members aren't real alerts with a
 	// firing/resolved lifecycle (e.g. forwarded emails) - so the message
 	// never shows a "RESOLVED" transition, a resolved color, or
@@ -54,7 +53,7 @@ func RenderBucketMessage(style GroupStyle, members []db.GroupMember) (string, []
 }
 
 func renderIndividual(style GroupStyle, m db.GroupMember) (string, []slack.Attachment) {
-	title := memberTitle(style, m)
+	title := memberTitle(m)
 
 	color := "#e01e5a"
 	if !style.NotificationOnly && m.Status == "resolved" {
@@ -91,7 +90,7 @@ func renderBatch(style GroupStyle, members []db.GroupMember) (string, []slack.At
 	targets := map[string]bool{}
 
 	for _, m := range members {
-		titles[memberTitle(style, m)] = true
+		titles[memberTitle(m)] = true
 		if m.Target != "" {
 			targets[m.Target] = true
 		}
@@ -154,15 +153,12 @@ func renderBatch(style GroupStyle, members []db.GroupMember) (string, []slack.At
 	return "", []slack.Attachment{{Color: color, Title: title, Fields: fields}}
 }
 
-// memberTitle picks the header text for one alert: its own rendered
-// display title if the rule's title template produced one, else the
-// group's static display title, else the alertname.
-func memberTitle(style GroupStyle, m db.GroupMember) string {
+// memberTitle picks the header text for one alert: its own display title
+// (the rule's static text or title template, rendered against this alert
+// at ingestion time), else the alertname.
+func memberTitle(m db.GroupMember) string {
 	if m.DisplayTitle != "" {
 		return m.DisplayTitle
-	}
-	if style.DisplayTitle != "" {
-		return style.DisplayTitle
 	}
 	return m.Alertname
 }

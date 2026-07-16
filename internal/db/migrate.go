@@ -101,7 +101,6 @@ CREATE TABLE IF NOT EXISTS alert_groups (
   rule_name        TEXT NOT NULL,
   channel          TEXT NOT NULL,
   team             TEXT,
-  display_title       TEXT NOT NULL DEFAULT '',
   notification_only   BOOLEAN NOT NULL DEFAULT false,
 
   members          JSONB NOT NULL DEFAULT '{}',
@@ -128,10 +127,14 @@ ALTER TABLE alert_groups DROP COLUMN IF EXISTS slack_ts;
 		// Upgrade path for anything already running an earlier version of
 		// this table, from before "notification-only" rules existed.
 		`
-ALTER TABLE alert_groups ADD COLUMN IF NOT EXISTS display_title TEXT NOT NULL DEFAULT '';
-`,
-		`
 ALTER TABLE alert_groups ADD COLUMN IF NOT EXISTS notification_only BOOLEAN NOT NULL DEFAULT false;
+`,
+		// display_title briefly lived on the group row, but the header can
+		// differ per alert within one group (a display-title template
+		// resolves against each alert's own labels/annotations), so it now
+		// lives on each member instead (see GroupMember.DisplayTitle).
+		`
+ALTER TABLE alert_groups DROP COLUMN IF EXISTS display_title;
 `,
 		// The flush worker polls exactly this shape: unflushed, due rows.
 		`

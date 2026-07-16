@@ -41,8 +41,7 @@ type GroupMember struct {
 	// workflows.renderDisplayTitle). Per-member rather than group-level
 	// because a title template like "{{ .Labels.match }}" can produce a
 	// different value for every alert in the same group. Empty means
-	// "no override" - rendering falls back to the group's static title,
-	// then to the alertname.
+	// "use Alertname".
 	DisplayTitle string `json:"display_title,omitempty"`
 
 	// DisplayFields are pre-resolved (title, value) pairs from the rule's
@@ -66,7 +65,6 @@ type AlertGroup struct {
 	RuleName         string
 	Channel          string
 	Team             string
-	DisplayTitle     string
 	NotificationOnly bool
 	Members          map[string]GroupMember
 	Attempts         int
@@ -84,7 +82,6 @@ type GroupInfo struct {
 	RuleName         string
 	Channel          string
 	Team             string
-	DisplayTitle     string
 	NotificationOnly bool
 }
 
@@ -123,29 +120,28 @@ func UpsertGroupMember(ctx context.Context, pool *pgxpool.Pool, info GroupInfo, 
 
 	_, err = pool.Exec(ctx, `
 		INSERT INTO alert_groups (
-		  group_key, rule_name, channel, team, display_title, notification_only, members,
+		  group_key, rule_name, channel, team, notification_only, members,
 		  dirty, first_event_at, flush_after, max_flush_by, updated_at
 		)
 		VALUES (
-		  $1, $2, $3, $4, $5, $6, jsonb_build_object($7::text, $8::jsonb),
-		  true, now(), now() + $9::interval, now() + $10::interval, now()
+		  $1, $2, $3, $4, $5, jsonb_build_object($6::text, $7::jsonb),
+		  true, now(), now() + $8::interval, now() + $9::interval, now()
 		)
 		ON CONFLICT (group_key) DO UPDATE SET
 		  members = jsonb_set(
 		    alert_groups.members,
-		    ARRAY[$7::text],
-		    COALESCE(alert_groups.members -> $7::text, '{}'::jsonb) || $8::jsonb,
+		    ARRAY[$6::text],
+		    COALESCE(alert_groups.members -> $6::text, '{}'::jsonb) || $7::jsonb,
 		    true
 		  ),
 		  team              = EXCLUDED.team,
-		  display_title     = EXCLUDED.display_title,
 		  notification_only = EXCLUDED.notification_only,
 		  dirty       = true,
 		  attempts    = 0,
 		  last_error  = NULL,
-		  flush_after = LEAST(now() + $9::interval, alert_groups.max_flush_by),
+		  flush_after = LEAST(now() + $8::interval, alert_groups.max_flush_by),
 		  updated_at  = now()
-	`, info.GroupKey, info.RuleName, info.Channel, info.Team, info.DisplayTitle, info.NotificationOnly,
+	`, info.GroupKey, info.RuleName, info.Channel, info.Team, info.NotificationOnly,
 		member.Fingerprint, string(memberJSON), debounceItv, maxItv)
 
 	return err
@@ -165,7 +161,7 @@ func ClaimDueGroups(ctx context.Context, pool *pgxpool.Pool, limit int, lease ti
 	defer tx.Rollback(ctx)
 
 	rows, err := tx.Query(ctx, `
-		SELECT group_key, rule_name, channel, team, display_title, notification_only, members, attempts
+		SELECT group_key, rule_name, channel, team, notification_only, members, attempts
 		FROM alert_groups
 		WHERE dirty AND flush_after <= now()
 		ORDER BY flush_after
@@ -182,7 +178,7 @@ func ClaimDueGroups(ctx context.Context, pool *pgxpool.Pool, limit int, lease ti
 		var g AlertGroup
 		var membersJSON []byte
 
-		if err := rows.Scan(&g.GroupKey, &g.RuleName, &g.Channel, &g.Team, &g.DisplayTitle, &g.NotificationOnly, &membersJSON, &g.Attempts); err != nil {
+		if err := rows.Scan(&g.GroupKey, &g.RuleName, &g.Channel, &g.Team, &g.NotificationOnly, &membersJSON, &g.Attempts); err != nil {
 			rows.Close()
 			return nil, err
 		}

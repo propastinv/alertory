@@ -74,7 +74,6 @@ func ProcessAlert(ctx context.Context, pool *pgxpool.Pool, rules []db.WorkflowRu
 			RuleName:         rule.Name,
 			Channel:          rule.Channel,
 			Team:             rule.Team,
-			DisplayTitle:     displayTitle,
 			NotificationOnly: rule.NotificationOnly,
 		}
 
@@ -103,9 +102,9 @@ func resolveDisplayFields(fields []db.RuleField, annotations, labels map[string]
 
 	var out []db.MemberField
 	for _, f := range fields {
-		v := annotations[f.AnnotationKey]
+		v := lookupKey(annotations, f.AnnotationKey)
 		if v == "" {
-			v = labels[f.AnnotationKey]
+			v = lookupKey(labels, f.AnnotationKey)
 		}
 		if v == "" {
 			continue
@@ -113,6 +112,22 @@ func resolveDisplayFields(fields []db.RuleField, annotations, labels map[string]
 		out = append(out, db.MemberField{Title: f.Title, Value: truncateValue(v, maxFieldValueLen)})
 	}
 	return out
+}
+
+// lookupKey finds a key exactly, then case-insensitively. Sources are
+// inconsistent about key casing ("Title" vs "title"), and a silently
+// missing Slack field over a case mismatch is a miserable thing to debug
+// from the message alone.
+func lookupKey(m map[string]string, key string) string {
+	if v, ok := m[key]; ok && v != "" {
+		return v
+	}
+	for k, v := range m {
+		if v != "" && strings.EqualFold(k, key) {
+			return v
+		}
+	}
+	return ""
 }
 
 // computeGroupKey decides which alerts get collapsed into the same Slack
