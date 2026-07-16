@@ -63,7 +63,7 @@ func ProcessAlert(ctx context.Context, pool *pgxpool.Pool, rules []db.WorkflowRu
 			Status:        status,
 			Target:        target,
 			DisplayTitle:  displayTitle,
-			DisplayFields: resolveDisplayFields(rule.ExtraFields, alert.Annotations),
+			DisplayFields: resolveDisplayFields(rule.ExtraFields, alert.Annotations, alert.Labels),
 			StartsAt:      alert.StartsAt,
 			EndsAt:        alert.EndsAt,
 			UpdatedAt:     time.Now(),
@@ -84,22 +84,30 @@ func ProcessAlert(ctx context.Context, pool *pgxpool.Pool, rules []db.WorkflowRu
 	}
 }
 
-// resolveDisplayFields picks out only the annotations a rule explicitly
-// mapped to a Slack field, and truncates each value. This is deliberately
-// an allow-list rather than "show every annotation": alert sources
-// sometimes stuff large raw payloads (a full email body, a stack trace)
-// into an annotation, and rendering that wholesale as its own field is
-// exactly what broke past cards - it blew past Slack's size limits and
-// silently pushed the fields the rule actually wanted off the message.
-func resolveDisplayFields(fields []db.RuleField, annotations map[string]string) []db.MemberField {
-	if len(fields) == 0 || len(annotations) == 0 {
+// resolveDisplayFields picks out only the keys a rule explicitly mapped to
+// a Slack field, and truncates each value. Each key is looked up in the
+// alert's annotations first, then its labels - sources spread this data
+// across both (an email bridge typically puts the address in a label and
+// the subject in an annotation), and which side a given key lives on is an
+// implementation detail of the source that a rule author shouldn't have to
+// know. This is deliberately an allow-list rather than "show everything":
+// alert sources sometimes stuff large raw payloads (a full email body, a
+// stack trace) into an annotation, and rendering that wholesale as its own
+// field is exactly what broke past cards - it blew past Slack's size
+// limits and silently pushed the fields the rule actually wanted off the
+// message.
+func resolveDisplayFields(fields []db.RuleField, annotations, labels map[string]string) []db.MemberField {
+	if len(fields) == 0 {
 		return nil
 	}
 
 	var out []db.MemberField
 	for _, f := range fields {
-		v, ok := annotations[f.AnnotationKey]
-		if !ok || v == "" {
+		v := annotations[f.AnnotationKey]
+		if v == "" {
+			v = labels[f.AnnotationKey]
+		}
+		if v == "" {
 			continue
 		}
 		out = append(out, db.MemberField{Title: f.Title, Value: truncateValue(v, maxFieldValueLen)})

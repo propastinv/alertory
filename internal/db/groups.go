@@ -72,10 +72,13 @@ type AlertGroup struct {
 	Attempts         int
 }
 
-// GroupInfo is the rule-level data snapshotted onto a group the first time
-// an alert creates it. It's fixed at creation and never updated by later
-// members joining the same group (see UpsertGroupMember), so a rule edited
-// mid-flight can't produce an inconsistent half-old-half-new message.
+// GroupInfo is the rule-level data stamped onto a group. It's written at
+// creation and refreshed from the rule on every later upsert (see
+// UpsertGroupMember): groups with a stable group key (e.g. all forwarded
+// emails sharing one alertname) can live across a rule edit, and the whole
+// point of editing a rule is that its next message looks like the new
+// config - a stale creation-time snapshot kept groups rendering the old
+// layout indefinitely.
 type GroupInfo struct {
 	GroupKey         string
 	RuleName         string
@@ -134,6 +137,9 @@ func UpsertGroupMember(ctx context.Context, pool *pgxpool.Pool, info GroupInfo, 
 		    COALESCE(alert_groups.members -> $7::text, '{}'::jsonb) || $8::jsonb,
 		    true
 		  ),
+		  team              = EXCLUDED.team,
+		  display_title     = EXCLUDED.display_title,
+		  notification_only = EXCLUDED.notification_only,
 		  dirty       = true,
 		  attempts    = 0,
 		  last_error  = NULL,
