@@ -201,7 +201,7 @@ func saveRuleHandler(pool *pgxpool.Pool) http.Handler {
 		rule := db.WorkflowRule{
 			ID:               id,
 			Name:             strings.TrimSpace(r.FormValue("name")),
-			Channel:          strings.TrimSpace(r.FormValue("channel")),
+			Channel:          normalizeChannelList(r.FormValue("channel")),
 			Team:             strings.TrimSpace(r.FormValue("team")),
 			TargetLabel:      strings.TrimSpace(r.FormValue("target_label")),
 			MatchLabels:      parseLabels(r.FormValue("match_labels")),
@@ -366,6 +366,26 @@ func parseCSV(raw string) []string {
 		}
 	}
 	return out
+}
+
+// normalizeChannelList cleans up a rule's Slack channel field: it's
+// usually a single channel/user ID, but can be a comma-separated list so
+// one rule notifies several channels/people at once. This trims
+// whitespace around each entry, drops empties, and dedupes, so what's
+// stored (and later split again by workflows.splitChannels) is always
+// tidy regardless of how the user typed it in.
+func normalizeChannelList(raw string) string {
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range strings.Split(raw, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return strings.Join(out, ", ")
 }
 
 func formatEnrichments(e []db.Enrichment) string {

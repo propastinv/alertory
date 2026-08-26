@@ -10,9 +10,10 @@
   </div>
 
   <div>
-    <label class="block text-sm font-medium mb-1">Slack channel ID</label>
-    <input name="channel" value="{{.Channel}}" required placeholder="C0123456 or U0123456"
+    <label class="block text-sm font-medium mb-1">Slack channel ID(s)</label>
+    <input name="channel" value="{{.Channel}}" required placeholder="C0123456, U0123456"
            class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
+    <p class="text-xs text-slate-400 mt-1">A channel or user ID. Separate several with commas to notify more than one channel/person - each gets its own message.</p>
   </div>
 
   <div>

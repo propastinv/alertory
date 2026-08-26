@@ -1,37 +1,113 @@
 # alertory
 
-Ingests Alertmanager webhooks, groups mass alerts, and notifies Slack. Ships a small web UI (dashboard, rule editor, Slack connection status) on the same port as the webhook.
+**Alertmanager fires. alertory dedupes, groups, and turns the mess into Slack messages that don't spam your team.**
+
+[![Build and Push](https://github.com/propastinv/alertory/actions/workflows/build.yml/badge.svg)](https://github.com/propastinv/alertory/actions/workflows/build.yml)
+[![Go Report](https://img.shields.io/badge/go-1.25-00ADD8?logo=go)](go.mod)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+alertory sits between [Prometheus Alertmanager](https://prometheus.io/docs/alerting/latest/alertmanager/) and Slack. It receives Alertmanager's webhook, decides which alerts belong together, waits just long enough to catch a burst, and posts (and later *edits*, never re-posts) one tidy Slack card per incident instead of a wall of duplicate pings. A small built-in web UI lets you manage routing rules without touching YAML or redeploying anything.
+
+It was built to fix a very specific, very common pain: a flapping check or a mass outage turning your `#alerts` channel into hundreds of near-identical messages that everyone mutes within a week.
+
+## Why it's worth using
+
+- **No more alert spam.** A burst of 200 identical alerts becomes one message ("200 hosts firing, 12 resolved") instead of 200. A single alert still gets its own dedicated card - nothing is combined until it actually needs to be.
+- **Messages update in place.** When an alert resolves, alertory edits the original Slack message instead of posting a new "RESOLVED" one. Your channel stays a live status board, not a scrolling transcript.
+- **Debounced, not delayed forever.** Alerts wait a short window (default 8s, capped at 45s) to see if friends show up before flushing - long enough to catch a burst, short enough that a single critical alert still reaches Slack in seconds.
+- **Routing rules live in a real UI**, backed by Postgres - no YAML redeploys to change where an alert goes. Match on any label, route by team, group related alerts together, pick which annotations show up as fields.
+- **Fan out to more than one place.** A rule's Slack destination can be a comma-separated list of channel/user IDs - notify a team channel and page a specific person from the same rule, with each destination's message tracked and edited independently.
+- **Enrich before you notify.** A rule can call out to an internal HTTP endpoint (e.g. "how many users does this affect?") before rendering the Slack card, so the first message already has the context an on-call engineer needs.
+- **Not just for alerts.** `notification_only` rules turn any Alertmanager-shaped webhook (a forwarded email, a one-off notice) into a plain "sent once, no lifecycle" Slack post - no fake "resolved" state required.
+- **Ingestion never blocks on Slack.** The webhook handler only writes to Postgres and returns; a separate flush worker talks to Slack out of band. If Slack is slow or down, Alertmanager still gets a fast `200 OK` and doesn't pile on retries.
+- **Boring, auditable storage.** Everything - active alerts, rules, in-flight message state - lives in Postgres. No hidden state in memory, no message tracking lost on a restart or a rolling deploy.
+- **Single small binary, single container.** One Go binary, one Postgres database. `docker-compose up` and you have a database; point the binary at it and you're running.
+
+## How it works
 
 ```
+Alertmanager --webhook--> alertory  --dedupe + debounce-->  alert_groups (Postgres)
+                              |                                    |
+                        matches rule                        flush worker (every 3s)
+                        (web UI / DB)                              |
+                                                              renders + posts/updates
+                                                                    |
+                                                                  Slack
+```
+
+1. **Ingest** - Alertmanager POSTs to `/api/v1/alerts`. Each alert is matched against your enabled rules and upserted into a debounced group; the handler never talks to Slack directly, so a Slack outage can't slow down or fail alert ingestion.
+2. **Dedupe & batch** - alerts sharing a rule and the same grouping labels (default: alertname) land in the same group. A burst above the mass-alert threshold collapses into one combined message; anything smaller gets one message per alert.
+3. **Flush** - a background worker claims due groups every few seconds, renders the Slack message, and either posts a new one or edits the existing one in place depending on whether this group has already been notified.
+4. **Manage** - the `/rules` web UI (behind SSO) is where you create, edit, and disable routing rules - who matches what, which Slack channel(s), which team, which annotations to surface, whether to batch by anything besides alertname.
+
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full data-flow and schema walkthrough.
+
+## Quick start
+
+```bash
+git clone https://github.com/propastinv/alertory.git
+cd alertory
+
+# spin up Postgres
+docker-compose up -d
+
 export DATABASE_URL="postgres://alertory:alertory@localhost:5432/alertory?sslmode=disable"
+go run ./cmd/app
 ```
 
-## Environment variables
+The service listens on `:8080` by default, serving both the Alertmanager webhook (`/api/v1/alerts`) and the web UI (`/`, `/rules`, `/settings`). Point Alertmanager's `webhook_configs` at `http://<host>:8080/api/v1/alerts`, then open `/rules` to create your first routing rule - or drop a legacy YAML rule file into `workflows/` before first boot to have it auto-imported.
 
-- `DATABASE_URL` (required)
-- `PORT` - HTTP port (default `8080`); serves both `/api/v1/alerts` and the web UI (`/`, `/rules`, `/settings`)
-- `BEARER_TOKEN` - if set, required as `Authorization: Bearer <token>` on the webhook endpoint (unaffected by SSO below)
-- `APP_URL` - this app's own public base URL (e.g. `https://alertory.example.com`), used to build both the Slack OAuth redirect and the OIDC redirect URI
-- `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET` - enables the "Connect Slack" OAuth flow under `/settings`
-- `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` - Keycloak realm SSO for the web UI. All three (plus `APP_URL`) must be set for the UI to work at all - see "Web UI auth" below.
-- `ALERT_RETENTION` - how long to keep resolved alert history (default `168h` / 7 days)
-- `CLEANUP_INTERVAL` - how often the retention cleanup runs (default `1h`)
-- `DB_MAX_CONNS`, `DB_MIN_CONNS` - Postgres pool sizing (defaults `25`/`4`)
-- `MASS_ALERT_THRESHOLD` - how many alerts becoming unsent together at once triggers a combined Slack message instead of one-per-alert (default `5`)
-- `ALERT_DEBOUNCE`, `ALERT_MAX_WINDOW` - burst-detection timing (defaults `8s` / `45s`)
+The web UI requires SSO (Keycloak or any OIDC provider) to be configured - see [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md#web-ui-auth) for why, and how to set it up. Without it, the UI serves `503` and only the webhook endpoint works.
 
-## Web UI auth
+### A minimal Alertmanager route
 
-The web UI (`/`, `/rules`, `/settings`, and the Slack OAuth callback) is public-facing and requires SSO login via Keycloak (or any spec-compliant OIDC provider) - `OIDC_ISSUER_URL` should be the realm URL, e.g. `https://keycloak.example.com/realms/alertory`. Register `${APP_URL}/auth/callback` as a valid redirect URI on the Keycloak client.
+```yaml
+receivers:
+  - name: alertory
+    webhook_configs:
+      - url: http://alertory:8080/api/v1/alerts
+        send_resolved: true
+```
 
-If `OIDC_ISSUER_URL`/`OIDC_CLIENT_ID`/`OIDC_CLIENT_SECRET` aren't all set, the web UI fails closed: every UI route returns 503 instead of running without auth. The `/api/v1/alerts` webhook is never affected either way - it keeps its own `BEARER_TOKEN` check, since Alertmanager can't do a browser login.
+### Running with Docker
 
-This only checks that a login succeeded against your Keycloak realm - it doesn't currently check group/role membership. If you need to restrict access to specific Keycloak groups, that would go in `internal/auth/handlers.go`'s callback, after `idToken.Claims(&claims)`.
+Prebuilt images are published to `ghcr.io/propastinv/alertory` on every version bump:
 
-## First-time setup after pulling this
+```bash
+docker run -p 8080:8080 \
+  -e DATABASE_URL="postgres://alertory:alertory@postgres:5432/alertory?sslmode=disable" \
+  ghcr.io/propastinv/alertory:latest
+```
 
-This adds `github.com/coreos/go-oidc/v3` and `golang.org/x/oauth2` as dependencies. Run `go mod tidy` once (needs network access) before building, so `go.sum` picks up their checksums.
+## Feature tour
 
-## Workflow rules
+| Feature | What it does |
+|---|---|
+| Dedup & debounce | Groups alerts by rule + labels, waits a short window before sending, so a flapping check doesn't spam a message per flap |
+| Mass-alert batching | A burst above a configurable threshold collapses into one combined message instead of one-per-alert |
+| Live-updating messages | Slack messages are edited in place as status changes, instead of piling up new ones |
+| Multi-channel routing | One rule can notify several Slack channels/users at once, each with its own independently-tracked message |
+| Enrichments | Rules can call out to an HTTP endpoint to attach extra context (e.g. affected user count) before the first send |
+| Custom fields | Map any alert annotation/label onto a named field shown on the Slack card |
+| Team & target labels | Surface a fixed "Team" and a per-alert "Target" (host, user, etc.) on every message from a rule |
+| Grouping by label | Group by any combination of labels, not just alertname, to control what counts as "the same incident" |
+| Notification-only rules | Treat a webhook as a one-shot notice (e.g. a forwarded email) with no firing/resolved lifecycle |
+| Web UI rule editor | Create, edit, and toggle rules from `/rules` - stored in Postgres, no redeploy needed |
+| Legacy YAML import | Existing `workflows/*.yaml` rule files are imported once on first boot into an empty rule set |
+| SSO-gated UI, token-gated webhook | The web UI requires OIDC/Keycloak login; the Alertmanager webhook uses its own bearer token |
+| Automatic retention | Resolved alert history and stale internal state are cleaned up on a schedule |
 
-Rules used to live in `workflows/*.yaml`. They're now edited from `/rules` in the web UI and stored in Postgres; the YAML files are only read once, on first boot with an empty `workflow_rules` table, to seed the initial set (match labels, channel, target label - `team` and `group_by` are new and start blank).
+## Documentation
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) - how a webhook call turns into a Slack message, and the Postgres schema behind it
+- [`docs/RULES.md`](docs/RULES.md) - everything a routing rule can do: matching, grouping, multi-channel, enrichments, notification-only
+- [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) - every environment variable, Slack OAuth setup, and SSO setup
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) - local dev setup and how to send a PR
+
+## Status
+
+alertory is a small, focused, actively-used internal tool that's been open-sourced as-is. It intentionally does one thing (Alertmanager → Slack, done well) rather than trying to be a general notification router. Issues and PRs are welcome.
+
+## License
+
+[MIT](LICENSE)

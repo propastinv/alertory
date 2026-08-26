@@ -20,13 +20,25 @@ type MemberField struct {
 	Value string `json:"value"`
 }
 
+// NotifiedTarget is one Slack message representing a bucket in one
+// specific channel. A rule's Channel can be a comma-separated list of
+// Slack channel IDs, so the same alert fans out to more than one
+// channel/person; each channel gets and maintains its own message
+// independently, which is why a member tracks one of these per channel
+// rather than a single channel/ts pair.
+type NotifiedTarget struct {
+	Channel string `json:"channel"`
+	TS      string `json:"ts"`
+}
+
 // GroupMember is the state of a single alert inside an alert_groups row.
-// NotifiedChannel/NotifiedTS identify which Slack message currently
-// represents this alert - by default that's a message of its own; it only
-// ends up sharing one with other members when they all became "unsent" at
-// the same time in numbers above the mass-alert threshold. NotifiedStatus
-// is the alert's Status as of the last successful send/update, used to
-// tell whether its message is still up to date.
+// NotifiedTargets identifies which Slack message(s) currently represent
+// this alert, one per destination channel - by default that's a message
+// of its own per channel; it only ends up sharing one with other members
+// when they all became "unsent" at the same time in numbers above the
+// mass-alert threshold. NotifiedStatus is the alert's Status as of the
+// last successful send/update, used to tell whether its message is still
+// up to date.
 type GroupMember struct {
 	Fingerprint string    `json:"fingerprint"`
 	Alertname   string    `json:"alertname"`
@@ -51,9 +63,8 @@ type GroupMember struct {
 	// rendered just because it happened to be present.
 	DisplayFields []MemberField `json:"display_fields,omitempty"`
 
-	NotifiedChannel string `json:"notified_channel,omitempty"`
-	NotifiedTS      string `json:"notified_ts,omitempty"`
-	NotifiedStatus  string `json:"notified_status,omitempty"`
+	NotifiedTargets []NotifiedTarget `json:"notified_targets,omitempty"`
+	NotifiedStatus  string           `json:"notified_status,omitempty"`
 }
 
 // AlertGroup is a durable queue of alerts sharing a rule/channel/group-by
@@ -104,7 +115,7 @@ func (g AlertGroup) AllResolved() bool {
 //
 // The member's JSON is merged into the existing one with jsonb_set + ||
 // rather than replaced outright: the incoming GroupMember never carries
-// NotifiedChannel/NotifiedTS/NotifiedStatus (those are only ever set by
+// NotifiedTargets/NotifiedStatus (those are only ever set by
 // the flush worker), and thanks to `omitempty` those keys are simply
 // absent from its JSON - so merging preserves whatever notification
 // bookkeeping already existed instead of wiping it out every time an
