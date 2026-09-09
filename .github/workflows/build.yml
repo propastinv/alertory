@@ -1,13 +1,7 @@
 name: Build and Push alertory
 
-# Triggered by pushing a `vX.Y.Z` tag - the single, manual "cut a
-# release" action for this repo (see helm-release.yml, which reacts to
-# the same tag to publish a matching Helm chart release). Replaces the
-# old VERSION-file-based trigger: bumping a file and pushing it to main
-# meant the "release" and "land this PR" actions were the same push,
-# which made it easy to release by accident and impossible to build an
-# image for a commit without also merging a VERSION bump for it. A tag
-# is a deliberate, separate action from merging.
+# Triggered by pushing a vX.Y.Z tag (see helm-release.yml, triggered
+# by the same tag).
 
 permissions:
   packages: write

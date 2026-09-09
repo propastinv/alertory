@@ -1,33 +1,12 @@
 name: Release Helm chart
 
-# Two different things can trigger this, and they behave differently:
+# vX.Y.Z (app release): bumps appVersion to match, chart version gets
+# an automatic patch bump.
+# chart-vX.Y.Z (chart-only release): chart version is set to exactly
+# what's in the tag, appVersion untouched.
 #
-#   - `vX.Y.Z` (same tag build.yml reacts to): an app release. Bumps
-#     the chart's `appVersion` to match the app tag, AND bumps the
-#     chart's own `version` with an automatic patch increment (its
-#     numbering is independent of the app's - it just has to keep
-#     going up on its own, regardless of what the app happens to be
-#     tagged). Bumping only appVersion would NOT be enough for anyone
-#     to notice an update: `helm repo update`, `helm upgrade` without
-#     --version, and Renovate all key off the chart's own `version` in
-#     the published index, nothing consults appVersion to decide
-#     there's something new.
-#
-#   - `chart-vX.Y.Z`: a chart-only release - values/templates/ingress
-#     changes with no app change behind them. The chart's `version` is
-#     set to exactly what's in the tag (chosen by hand - bump whatever
-#     component makes sense, not just patch), and `appVersion` is left
-#     untouched since no new app version actually shipped.
-#
-# One-time repo setup required before this works:
-#   - Settings -> Pages -> Deploy from a branch -> gh-pages / (root)
-#     (only selectable once the branch below actually exists)
-#
-# cr index does NOT create the gh-pages branch itself - `cr index
-# --push` does a `git worktree add ... origin/gh-pages`, which fails
-# with "fatal: invalid reference: origin/gh-pages" if that ref doesn't
-# exist yet. The "Ensure gh-pages branch exists" step below creates it
-# (an empty orphan branch) so the very first run doesn't fail on this.
+# One-time setup: Settings -> Pages -> Deploy from a branch -> gh-pages
+# (only selectable once that branch exists - see the step below).
 
 on:
   push:
@@ -59,17 +38,10 @@ jobs:
           ref="$GITHUB_REF_NAME"
 
           if [[ "$ref" == chart-v* ]]; then
-            # Chart-only release: the tag itself IS the new chart
-            # version, picked by hand - any component (major/minor/
-            # patch) may change. appVersion is untouched.
             new_chart_version="${ref#chart-v}"
             sed -i "s/^version: .*/version: $new_chart_version/" charts/alertory/Chart.yaml
             commit_msg="chore(chart): release $new_chart_version (chart-only)"
           else
-            # App release: appVersion follows the app tag; the chart's
-            # own version gets an automatic patch bump. Plain integer
-            # arithmetic, so 9->10, 99->100, etc. "just work" - no
-            # special-casing needed for the rollover.
             app_version="${ref#v}"
             chart_version=$(grep '^version:' charts/alertory/Chart.yaml | awk '{print $2}')
             IFS='.' read -r major minor patch <<< "$chart_version"
@@ -90,9 +62,6 @@ jobs:
       - name: Ensure gh-pages branch exists
         run: |
           if ! git ls-remote --exit-code --heads origin gh-pages > /dev/null; then
-            # We're on a detached HEAD (tag checkout, then a new commit
-            # on top from the step above) - capture it by SHA, since
-            # GITHUB_REF_NAME here is the tag, not a branch to check out.
             orig_ref=$(git rev-parse HEAD)
             git checkout --orphan gh-pages
             git reset --hard
