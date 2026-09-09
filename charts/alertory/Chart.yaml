@@ -2,7 +2,7 @@ apiVersion: v2
 name: alertory
 description: Alertmanager fires. alertory dedupes, groups, and turns the mess into Slack messages that don't spam your team.
 type: application
-version: 0.1.0
+version: 0.1.1
 appVersion: "0.0.22"
 home: https://github.com/propastinv/alertory
 sources:
