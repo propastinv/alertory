@@ -94,7 +94,7 @@ func mustBuildAuthService(ctx context.Context) *auth.Service {
 		log.Fatal("APP_URL is required when OIDC_ISSUER_URL is set (used to build the OIDC redirect URL)")
 	}
 
-	svc, err := auth.New(ctx, issuerURL, clientID, clientSecret, appURL+"/auth/callback")
+	svc, err := auth.New(ctx, issuerURL, clientID, clientSecret, appURL+"/ui/auth/callback")
 	if err != nil {
 		log.Fatalf("failed to initialize OIDC/SSO: %v", err)
 	}

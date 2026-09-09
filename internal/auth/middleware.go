@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/subtle"
 	"net/http"
 	"net/url"
 
@@ -71,5 +72,8 @@ func CheckCSRF(r *http.Request) bool {
 		return false
 	}
 	token := r.FormValue("csrf_token")
-	return token != "" && token == sess.CSRFToken
+	if token == "" || len(token) != len(sess.CSRFToken) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(token), []byte(sess.CSRFToken)) == 1
 }
