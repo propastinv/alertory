@@ -1,0 +1,37 @@
+{{- $fullname := include "alertory.fullname" . }}
+{{- $svcPort := .Values.service.port }}
+{{- range $key, $ing := (dict "webhook" .Values.ingress.webhook "ui" .Values.ingress.ui) }}
+{{- if $ing.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullname }}-{{ $key }}
+  labels:
+    {{- include "alertory.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $key }}
+  {{- with $ing.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with $ing.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with $ing.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ $ing.host | quote }}
+      http:
+        paths:
+          - path: {{ $ing.path }}
+            pathType: {{ $ing.pathType }}
+            backend:
+              service:
+                name: {{ $fullname }}
+                port:
+                  number: {{ $svcPort }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,157 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/propastinv/alertory
+  pullPolicy: IfNotPresent
+  # Defaults to .Chart.AppVersion when empty.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  fsGroup: 65532
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# alertory listens on a single port and serves two logically separate
+# surfaces: the public Alertmanager webhook (/api/v1/alerts) and the
+# admin web UI (/ui/*, SSO-gated). ingress.webhook and ingress.ui are
+# split so you can point each at a different host/annotation set (e.g.
+# public DNS + no auth annotations for the webhook, an internal-only
+# ingress class or an auth-gateway annotation for /ui) even though both
+# reach the same Service/pods.
+ingress:
+  webhook:
+    enabled: false
+    className: ""
+    annotations: {}
+    host: "alertory.example.com"
+    path: /api/v1/alerts
+    pathType: Prefix
+    tls: []
+    # - secretName: alertory-webhook-tls
+    #   hosts:
+    #     - alertory.example.com
+
+  ui:
+    enabled: false
+    className: ""
+    annotations: {}
+    # Point this at an internal host, or reuse the webhook host with a
+    # restrictive annotation set (IP allowlist, oauth2-proxy, etc.) - your
+    # call, since alertory already gates /ui with its own SSO.
+    host: "alertory-admin.example.com"
+    path: /ui
+    pathType: Prefix
+    tls: []
+    # - secretName: alertory-ui-tls
+    #   hosts:
+    #     - alertory-admin.example.com
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+livenessProbe:
+  httpGet:
+    path: /api/v1/alerts
+    port: http
+  # An empty POST-only route returns 400 (not the 404 a wrong path would),
+  # which is enough to prove the process is up and serving.
+  initialDelaySeconds: 5
+  periodSeconds: 15
+
+readinessProbe:
+  httpGet:
+    path: /api/v1/alerts
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+# Non-secret configuration, injected as plain env vars.
+config:
+  PORT: "8080"
+  ALERT_DEBOUNCE: "8s"
+  ALERT_MAX_WINDOW: "45s"
+  MASS_ALERT_THRESHOLD: "5"
+  ALERT_RETENTION: "168h"
+  CLEANUP_INTERVAL: "1h"
+  DB_MAX_CONNS: "25"
+  DB_MIN_CONNS: "4"
+  # This app's own public base URL - required for SSO and Slack OAuth
+  # redirects. Usually the webhook ingress host (Alertmanager's URL); if
+  # you split hosts between ingress.webhook and ingress.ui, this must be
+  # whichever host actually resolves to a browser-reachable /ui.
+  APP_URL: ""
+
+# Secret values. Either let the chart create a Secret from `secret.data`
+# (fine for a quick start, but the values land in Helm's release
+# metadata/history - which is why an `existingSecret` escape hatch is
+# provided), or point at a Secret you manage separately (sealed-secrets,
+# external-secrets, vault-injector, etc).
+secret:
+  # Set to reference a pre-existing Secret instead of the one this chart
+  # creates from `secret.data`. Keys must match the ones under `data`
+  # below (DATABASE_URL, BEARER_TOKEN, ...).
+  existingSecret: ""
+
+  data:
+    DATABASE_URL: ""
+    BEARER_TOKEN: ""
+    SLACK_CLIENT_ID: ""
+    SLACK_CLIENT_SECRET: ""
+    OIDC_ISSUER_URL: ""
+    OIDC_CLIENT_ID: ""
+    OIDC_CLIENT_SECRET: ""
+
+# Bundled Postgres (bitnami/postgresql subchart) for a quick start. For a
+# real deployment, set this to false and point `secret.data.DATABASE_URL`
+# (or your existingSecret) at a managed/external Postgres instead - this
+# chart's own copy has no backup story.
+postgresql:
+  enabled: false
+  auth:
+    username: alertory
+    password: alertory
+    database: alertory
+  primary:
+    persistence:
+      enabled: true
+      size: 2Gi
+
+# Only used when postgresql.enabled is true, to build DATABASE_URL for
+# the bundled instance automatically.
+postgresqlDatabaseOverride: ""

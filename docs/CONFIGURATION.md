@@ -54,6 +54,10 @@ If the variables *are* set but OIDC discovery fails at startup (e.g. the provide
 
 SSO here only checks that a login succeeded against your provider - it doesn't check group/role membership. To restrict access to specific groups, that logic goes in `internal/auth/handlers.go`'s callback, after `idToken.Claims(&claims)`.
 
+### Splitting ingress by path
+
+The admin surface (dashboard, rules, settings, login, Slack OAuth) lives entirely under `/ui/`; the Alertmanager webhook is the single route `/api/v1/alerts`. In Kubernetes this lets you expose the webhook publicly while keeping `/ui` on an internal-only Ingress (different host, `nginx.ingress.kubernetes.io/whitelist-source-range`, a private ingress class, etc.) - the included Helm chart (see [`charts/alertory`](../charts/alertory)) sets this up as two separate `Ingress` resources by default.
+
 ## Example `.env`
 
 ```bash
