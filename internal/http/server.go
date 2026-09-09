@@ -10,6 +10,25 @@ import (
 	"github.com/propastinv/alertory/internal/workflows"
 )
 
+// healthzHandler is an unauthenticated liveness/readiness endpoint. It
+// exists because /api/v1/alerts - the only other unauthenticated-by-
+// default route - starts requiring a bearer token as soon as
+// BEARER_TOKEN is set (which CONFIGURATION.md recommends for any real
+// deployment), which would otherwise make a naive Kubernetes probe
+// pointed at it fail with 401 forever. Pings the pool so a pod that
+// can't reach Postgres gets reported unready instead of accepting
+// traffic it can't actually serve.
+func healthzHandler(pool *pgxpool.Pool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := pool.Ping(r.Context()); err != nil {
+			http.Error(w, "db unreachable", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+}
+
 // NewServer wires up both the Alertmanager webhook API and the web UI on
 // a single mux. The webhook (/api/v1/alerts) keeps its own bearer-token
 // check and is never gated by authSvc - Alertmanager can't do a browser
@@ -30,6 +49,7 @@ func NewServer(pool *pgxpool.Pool, rules *workflows.RuleStore, authSvc *auth.Ser
 
 	token := os.Getenv("BEARER_TOKEN")
 	mux.Handle("/api/v1/alerts", AlertsHandler(pool, rules, token))
+	mux.Handle("/healthz", healthzHandler(pool))
 
 	if authSvc == nil {
 		log.Println("WARNING: OIDC_ISSUER_URL/OIDC_CLIENT_ID/OIDC_CLIENT_SECRET not fully set - web UI is disabled (503) until SSO is configured")
