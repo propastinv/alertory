@@ -56,11 +56,18 @@ creates, or the existingSecret the user pointed us at.
 {{- end }}
 
 {{/*
-DATABASE_URL for the bundled bitnami/postgresql subchart, built the way
-that chart names its Service/auth so alertory can reach it without the
-user having to duplicate connection details by hand.
+Name of the bundled Postgres StatefulSet/Service (see postgresql.yaml).
+*/}}
+{{- define "alertory.postgresqlFullname" -}}
+{{- printf "%s-postgresql" (include "alertory.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+DATABASE_URL for the bundled Postgres, built from postgresql.auth so
+alertory can reach it without the user having to duplicate connection
+details by hand.
 */}}
 {{- define "alertory.postgresqlDatabaseURL" -}}
 {{- $database := .Values.postgresqlDatabaseOverride | default .Values.postgresql.auth.database }}
-{{- printf "postgres://%s:%s@%s-postgresql:5432/%s?sslmode=disable" .Values.postgresql.auth.username .Values.postgresql.auth.password .Release.Name $database }}
+{{- printf "postgres://%s:%s@%s:5432/%s?sslmode=disable" .Values.postgresql.auth.username .Values.postgresql.auth.password (include "alertory.postgresqlFullname" .) $database }}
 {{- end }}
