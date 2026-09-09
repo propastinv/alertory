@@ -1,0 +1,50 @@
+name: CI
+
+# Runs on every PR (and as a safety net on direct pushes to main) so
+# merging is gated on the code actually building, vet-ing clean,
+# gofmt'd, and the Helm chart lint-ing clean. This is deliberately
+# separate from helm-release.yml: that workflow publishes a GitHub
+# Release and pushes to gh-pages - a one-way, hard-to-undo action that
+# must never run as a side effect of a routine PR/merge, only when a
+# `chart-v*` tag is pushed on purpose.
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: gofmt check
+        run: |
+          fmt_out=$(gofmt -l .)
+          if [ -n "$fmt_out" ]; then
+            echo "gofmt found unformatted files (run 'gofmt -w .' locally):"
+            echo "$fmt_out"
+            exit 1
+          fi
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Helm lint
+        run: helm lint --strict charts/alertory

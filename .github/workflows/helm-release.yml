@@ -2,29 +2,35 @@ name: Release Helm chart
 
 # Publishes charts/alertory as a proper Helm repository hosted on GitHub
 # Pages, so `helm repo add alertory https://<owner>.github.io/<repo>`
-# works. chart-releaser only packages+publishes a chart whose version
-# (Chart.yaml) doesn't already have a matching GitHub release/tag, so
-# bumping charts/alertory/Chart.yaml's `version` is what triggers a
-# publish - pushing app changes without a chart version bump does not
-# re-publish anything.
+# works.
+#
+# Deliberately triggered ONLY by an explicit `chart-v*` tag push, never
+# by a routine push/merge to main. This used to trigger on any push to
+# main touching charts/** - which meant an unrelated merge (or, worse,
+# a history rewrite that re-touched an old commit under charts/**)
+# could re-run this and hit chart-releaser trying to recreate a release
+# that already exists, hard-failing the run for no real reason. See
+# ci.yml for the "build/vet/lint on every PR" workflow instead - that
+# one's safe to run on every push.
+#
+# To cut a chart release:
+#   1. Bump charts/alertory/Chart.yaml's `version`.
+#   2. git tag chart-vX.Y.Z && git push origin chart-vX.Y.Z
 #
 # One-time repo setup required before this works:
 #   - Settings -> Pages -> Deploy from a branch -> gh-pages / (root)
 #     (only selectable once the branch below actually exists)
 #
-# Despite what an earlier version of this comment claimed, cr index
-# does NOT create the gh-pages branch itself - `cr index --push` does
-# a `git worktree add ... origin/gh-pages`, which fails with "fatal:
-# invalid reference: origin/gh-pages" if that ref doesn't exist yet.
-# The "Ensure gh-pages branch exists" step below creates it (an empty
-# orphan branch) so the very first run doesn't fail on this.
+# cr index does NOT create the gh-pages branch itself - `cr index
+# --push` does a `git worktree add ... origin/gh-pages`, which fails
+# with "fatal: invalid reference: origin/gh-pages" if that ref doesn't
+# exist yet. The "Ensure gh-pages branch exists" step below creates it
+# (an empty orphan branch) so the very first run doesn't fail on this.
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - "charts/**"
+    tags:
+      - "chart-v*"
   workflow_dispatch:
 
 permissions:
@@ -50,16 +56,21 @@ jobs:
       - name: Ensure gh-pages branch exists
         run: |
           if ! git ls-remote --exit-code --heads origin gh-pages > /dev/null; then
+            # A tag checkout leaves us in detached HEAD, so "return to
+            # what we had" means the current commit, not a branch name
+            # (GITHUB_REF_NAME is the tag itself here, not a branch).
+            orig_ref=$(git rev-parse HEAD)
             git checkout --orphan gh-pages
             git reset --hard
             git commit --allow-empty -m "Initialize gh-pages branch"
             git push origin gh-pages
-            git checkout "$GITHUB_REF_NAME"
+            git checkout "$orig_ref"
           fi
 
       - name: Run chart-releaser
         uses: helm/chart-releaser-action@v1.6.0
         with:
           charts_dir: charts
+          skip_existing: true
         env:
           CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
