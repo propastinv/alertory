@@ -7,7 +7,7 @@ alertory is configured entirely through environment variables - no config file.
 | Variable | Default | Description |
 |---|---|---|
 | `DATABASE_URL` | *(required)* | Postgres connection string, e.g. `postgres://alertory:alertory@localhost:5432/alertory?sslmode=disable`. |
-| `PORT` | `8080` | HTTP port. Serves both `/api/v1/alerts` (the Alertmanager webhook) and the web UI (`/`, `/rules`, `/settings`). |
+| `PORT` | `8080` | HTTP port. Serves both `/api/v1/alerts` (the Alertmanager webhook) and the web UI under `/ui/` (`/ui/`, `/ui/rules`, `/ui/settings`) - split so an Ingress can route each prefix differently. |
 | `BEARER_TOKEN` | *(none)* | If set, required as `Authorization: Bearer <token>` on the webhook endpoint. Independent of the web UI's SSO - set this so anyone who can reach the webhook route can't post arbitrary alerts. |
 | `APP_URL` | *(required for SSO/Slack OAuth)* | This app's own public base URL (e.g. `https://alertory.example.com`). Used to build both the Slack OAuth redirect and the OIDC redirect URI. |
 
@@ -29,24 +29,24 @@ alertory is configured entirely through environment variables - no config file.
 
 ## Slack
 
-Slack delivery is authenticated via a workspace-level OAuth token, connected once from the `/settings` page in the web UI (not per-rule):
+Slack delivery is authenticated via a workspace-level OAuth token, connected once from the `/ui/settings` page in the web UI (not per-rule):
 
 | Variable | Description |
 |---|---|
-| `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET` | Your Slack app's credentials. Enables the "Connect Slack" button under `/settings`, which walks through OAuth and stores the resulting access token in Postgres. |
+| `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET` | Your Slack app's credentials. Enables the "Connect Slack" button under `/ui/settings`, which walks through OAuth and stores the resulting access token in Postgres. |
 
-Your Slack app needs `chat:write` scope (to post and update messages) and its OAuth redirect URL set to `${APP_URL}/providers/oauth2/slack`.
+Your Slack app needs `chat:write` scope (to post and update messages) and its OAuth redirect URL set to `${APP_URL}/ui/providers/oauth2/slack`.
 
 ## Web UI auth
 
-The web UI (`/`, `/rules`, `/settings`, and the Slack OAuth callback) is public-facing and requires SSO login via an OIDC-compliant provider (Keycloak is what it's built against, but any spec-compliant provider should work):
+The web UI (everything under `/ui/`, including the Slack OAuth callback) is public-facing and requires SSO login via an OIDC-compliant provider (Keycloak is what it's built against, but any spec-compliant provider should work):
 
 | Variable | Description |
 |---|---|
 | `OIDC_ISSUER_URL` | The realm/issuer URL, e.g. `https://keycloak.example.com/realms/alertory`. |
 | `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | Your OIDC client's credentials. |
 
-Register `${APP_URL}/auth/callback` as a valid redirect URI on the OIDC client.
+Register `${APP_URL}/ui/auth/callback` as a valid redirect URI on the OIDC client.
 
 **All three of `OIDC_ISSUER_URL` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET`, plus `APP_URL`, must be set for the UI to work at all.** If any are missing, the web UI fails closed: every UI route returns `503` rather than running without auth. The `/api/v1/alerts` webhook is never affected either way - it only ever checks its own `BEARER_TOKEN`, since Alertmanager can't do a browser login.
 

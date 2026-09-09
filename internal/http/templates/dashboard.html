@@ -5,9 +5,9 @@
 </div>
 
 <div class="mb-4 flex gap-2 text-sm">
-  <a href="/" class="px-3 py-1 rounded-full {{if eq .StatusFilter ""}}bg-slate-900 text-white{{else}}bg-slate-200 text-slate-700{{end}}">All</a>
-  <a href="/?status=firing" class="px-3 py-1 rounded-full {{if eq .StatusFilter "firing"}}bg-red-600 text-white{{else}}bg-slate-200 text-slate-700{{end}}">Firing</a>
-  <a href="/?status=resolved" class="px-3 py-1 rounded-full {{if eq .StatusFilter "resolved"}}bg-emerald-600 text-white{{else}}bg-slate-200 text-slate-700{{end}}">Resolved</a>
+  <a href="/ui/" class="px-3 py-1 rounded-full {{if eq .StatusFilter ""}}bg-slate-900 text-white{{else}}bg-slate-200 text-slate-700{{end}}">All</a>
+  <a href="/ui/?status=firing" class="px-3 py-1 rounded-full {{if eq .StatusFilter "firing"}}bg-red-600 text-white{{else}}bg-slate-200 text-slate-700{{end}}">Firing</a>
+  <a href="/ui/?status=resolved" class="px-3 py-1 rounded-full {{if eq .StatusFilter "resolved"}}bg-emerald-600 text-white{{else}}bg-slate-200 text-slate-700{{end}}">Resolved</a>
 </div>
 
 <div class="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">

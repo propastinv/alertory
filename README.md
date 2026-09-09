@@ -38,7 +38,7 @@ Alertmanager --webhook--> alertory  --dedupe + debounce-->  alert_groups (Postgr
 1. **Ingest** - Alertmanager POSTs to `/api/v1/alerts`. Each alert is matched against your enabled rules and upserted into a debounced group; the handler never talks to Slack directly, so a Slack outage can't slow down or fail alert ingestion.
 2. **Dedupe & batch** - alerts sharing a rule and the same grouping labels (default: alertname) land in the same group. A burst above the mass-alert threshold collapses into one combined message; anything smaller gets one message per alert.
 3. **Flush** - a background worker claims due groups every few seconds, renders the Slack message, and either posts a new one or edits the existing one in place depending on whether this group has already been notified.
-4. **Manage** - the `/rules` web UI (behind SSO) is where you create, edit, and disable routing rules - who matches what, which Slack channel(s), which team, which annotations to surface, whether to batch by anything besides alertname.
+4. **Manage** - the `/ui/rules` web UI (behind SSO) is where you create, edit, and disable routing rules - who matches what, which Slack channel(s), which team, which annotations to surface, whether to batch by anything besides alertname.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full data-flow and schema walkthrough.
 
@@ -55,9 +55,9 @@ export DATABASE_URL="postgres://alertory:alertory@localhost:5432/alertory?sslmod
 go run ./cmd/app
 ```
 
-The service listens on `:8080` by default, serving both the Alertmanager webhook (`/api/v1/alerts`) and the web UI (`/`, `/rules`, `/settings`). Point Alertmanager's `webhook_configs` at `http://<host>:8080/api/v1/alerts`, then open `/rules` to create your first routing rule - or drop a legacy YAML rule file into `workflows/` before first boot to have it auto-imported.
+The service listens on `:8080` by default, serving both the Alertmanager webhook (`/api/v1/alerts`) and the web UI under `/ui/` (`/ui/`, `/ui/rules`, `/ui/settings`). Point Alertmanager's `webhook_configs` at `http://<host>:8080/api/v1/alerts`, then open `/ui/rules` to create your first routing rule - or drop a legacy YAML rule file into `workflows/` before first boot to have it auto-imported.
 
-The web UI requires SSO (Keycloak or any OIDC provider) to be configured - see [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md#web-ui-auth) for why, and how to set it up. Without it, the UI serves `503` and only the webhook endpoint works.
+The web UI (everything under `/ui/`) requires SSO (Keycloak or any OIDC provider) to be configured - see [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md#web-ui-auth) for why, and how to set it up. Without it, the UI serves `503` and only the webhook endpoint works.
 
 ### A minimal Alertmanager route
 
@@ -92,7 +92,7 @@ docker run -p 8080:8080 \
 | Team & target labels | Surface a fixed "Team" and a per-alert "Target" (host, user, etc.) on every message from a rule |
 | Grouping by label | Group by any combination of labels, not just alertname, to control what counts as "the same incident" |
 | Notification-only rules | Treat a webhook as a one-shot notice (e.g. a forwarded email) with no firing/resolved lifecycle |
-| Web UI rule editor | Create, edit, and toggle rules from `/rules` - stored in Postgres, no redeploy needed |
+| Web UI rule editor | Create, edit, and toggle rules from `/ui/rules` - stored in Postgres, no redeploy needed |
 | Legacy YAML import | Existing `workflows/*.yaml` rule files are imported once on first boot into an empty rule set |
 | SSO-gated UI, token-gated webhook | The web UI requires OIDC/Keycloak login; the Alertmanager webhook uses its own bearer token |
 | Automatic retention | Resolved alert history and stale internal state are cleaned up on a schedule |
