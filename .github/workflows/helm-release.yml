@@ -1,21 +1,19 @@
 name: Release Helm chart
 
-# Publishes charts/alertory as a proper Helm repository hosted on GitHub
-# Pages, so `helm repo add alertory https://<owner>.github.io/<repo>`
-# works.
+# Runs on the same `vX.Y.Z` tag push as build.yml - one manual action
+# (`git tag vX.Y.Z && git push origin vX.Y.Z`) ships both the app's
+# Docker image and a matching Helm chart release, so a cluster running
+# via this chart can actually pick up the new app version.
 #
-# Deliberately triggered ONLY by an explicit `chart-v*` tag push, never
-# by a routine push/merge to main. This used to trigger on any push to
-# main touching charts/** - which meant an unrelated merge (or, worse,
-# a history rewrite that re-touched an old commit under charts/**)
-# could re-run this and hit chart-releaser trying to recreate a release
-# that already exists, hard-failing the run for no real reason. See
-# ci.yml for the "build/vet/lint on every PR" workflow instead - that
-# one's safe to run on every push.
-#
-# To cut a chart release:
-#   1. Bump charts/alertory/Chart.yaml's `version`.
-#   2. git tag chart-vX.Y.Z && git push origin chart-vX.Y.Z
+# Bumping only the chart's `appVersion` here would NOT be enough for
+# that: `helm repo update`, `helm upgrade` without --version, and tools
+# like Renovate all key off the chart's own `version` field in the
+# published index - appVersion is just a label shown by `helm show
+# chart`, nothing consults it to decide there's an update. So every
+# run bumps `version` too (a plain patch increment, kept independent
+# of the app's own tag numbering - it must stay monotonically
+# increasing across releases regardless of what number the app happens
+# to be tagged with) alongside `appVersion` (set to match the tag).
 #
 # One-time repo setup required before this works:
 #   - Settings -> Pages -> Deploy from a branch -> gh-pages / (root)
@@ -30,7 +28,7 @@ name: Release Helm chart
 on:
   push:
     tags:
-      - "chart-v*"
+      - "v*"
   workflow_dispatch:
 
 permissions:
@@ -50,15 +48,31 @@ jobs:
           git config user.name "$GITHUB_ACTOR"
           git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
 
+      - name: Bump chart version and appVersion
+        run: |
+          set -euo pipefail
+          app_version="${GITHUB_REF_NAME#v}"
+
+          chart_version=$(grep '^version:' charts/alertory/Chart.yaml | awk '{print $2}')
+          IFS='.' read -r major minor patch <<< "$chart_version"
+          new_chart_version="$major.$minor.$((patch + 1))"
+
+          sed -i "s/^version: .*/version: $new_chart_version/" charts/alertory/Chart.yaml
+          sed -i "s/^appVersion: .*/appVersion: \"$app_version\"/" charts/alertory/Chart.yaml
+
+          git add charts/alertory/Chart.yaml
+          git commit -m "chore(chart): release $new_chart_version for app $GITHUB_REF_NAME"
+          git push origin HEAD:main
+
       - name: Install Helm
         uses: azure/setup-helm@v4
 
       - name: Ensure gh-pages branch exists
         run: |
           if ! git ls-remote --exit-code --heads origin gh-pages > /dev/null; then
-            # A tag checkout leaves us in detached HEAD, so "return to
-            # what we had" means the current commit, not a branch name
-            # (GITHUB_REF_NAME is the tag itself here, not a branch).
+            # We're on a detached HEAD (tag checkout, then a new commit
+            # on top from the step above) - capture it by SHA, since
+            # GITHUB_REF_NAME here is the tag, not a branch to check out.
             orig_ref=$(git rev-parse HEAD)
             git checkout --orphan gh-pages
             git reset --hard

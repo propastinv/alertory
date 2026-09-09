@@ -48,6 +48,22 @@ curl -X POST localhost:8080/api/v1/alerts \
 - Describe the *problem* being solved, not just the change, especially for anything touching dedup/batching/delivery timing - that logic has non-obvious edge cases (see the comments in `internal/workflows/batching.go` and `internal/workflows/flush.go`) and reviewers need the reasoning to sanity-check it.
 - Note any manual testing you did (e.g. "sent N bursts of test alerts through a local Alertmanager and confirmed one combined message").
 
+## Releasing
+
+Releases are cut by pushing a tag, not by merging anything special:
+
+```bash
+git tag v0.0.23
+git push origin v0.0.23
+```
+
+That single push (must point at a commit already on `main`) triggers two workflows:
+
+- [`build.yml`](.github/workflows/build.yml) builds and pushes `ghcr.io/propastinv/alertory:0.0.23` (and re-tags `:latest`).
+- [`helm-release.yml`](.github/workflows/helm-release.yml) bumps [`charts/alertory/Chart.yaml`](charts/alertory/Chart.yaml)'s `appVersion` to `0.0.23` and its own `version` (a patch bump, independent of the app's version number - it has to keep increasing on its own regardless of what the app is tagged, or `helm repo update`/Renovate/anyone pinned to "latest" chart version won't see anything new to pick up), commits that bump to `main`, and publishes the chart to the [Helm repo](charts/alertory/README.md).
+
+Both are gated behind [`ci.yml`](.github/workflows/ci.yml) passing on `main` first (build/vet/gofmt/helm-lint) - make sure the commit you're tagging is one where that's green.
+
 ## Reporting bugs / requesting features
 
 Open a GitHub issue. For a bug, include what you sent Alertmanager (or the raw webhook payload), what you expected in Slack, and what you got instead - the mismatch is usually the whole story with this kind of pipeline.

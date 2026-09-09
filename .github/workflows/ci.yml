@@ -3,10 +3,10 @@ name: CI
 # Runs on every PR (and as a safety net on direct pushes to main) so
 # merging is gated on the code actually building, vet-ing clean,
 # gofmt'd, and the Helm chart lint-ing clean. This is deliberately
-# separate from helm-release.yml: that workflow publishes a GitHub
-# Release and pushes to gh-pages - a one-way, hard-to-undo action that
+# separate from build.yml/helm-release.yml: those publish a Docker
+# image and a Helm chart release - one-way, hard-to-undo actions that
 # must never run as a side effect of a routine PR/merge, only when a
-# `chart-v*` tag is pushed on purpose.
+# `vX.Y.Z` tag is pushed on purpose.
 
 on:
   pull_request:
