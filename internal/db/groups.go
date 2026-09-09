@@ -40,13 +40,13 @@ type NotifiedTarget struct {
 // last successful send/update, used to tell whether its message is still
 // up to date.
 type GroupMember struct {
-	Fingerprint string    `json:"fingerprint"`
-	Alertname   string    `json:"alertname"`
-	Status      string    `json:"status"` // "firing" or "resolved"
-	Target      string    `json:"target,omitempty"`
-	StartsAt    time.Time `json:"starts_at"`
+	Fingerprint string     `json:"fingerprint"`
+	Alertname   string     `json:"alertname"`
+	Status      string     `json:"status"` // "firing" or "resolved"
+	Target      string     `json:"target,omitempty"`
+	StartsAt    time.Time  `json:"starts_at"`
 	EndsAt      *time.Time `json:"ends_at,omitempty"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 
 	// DisplayTitle is the rule's display-title setting rendered against
 	// this specific alert's labels/annotations at ingestion time (see
