@@ -10,8 +10,14 @@ name: Release Helm chart
 #
 # One-time repo setup required before this works:
 #   - Settings -> Pages -> Deploy from a branch -> gh-pages / (root)
-#   - An (initially empty) orphan `gh-pages` branch must exist; the
-#     first run of chart-releaser creates it automatically.
+#     (only selectable once the branch below actually exists)
+#
+# Despite what an earlier version of this comment claimed, cr index
+# does NOT create the gh-pages branch itself - `cr index --push` does
+# a `git worktree add ... origin/gh-pages`, which fails with "fatal:
+# invalid reference: origin/gh-pages" if that ref doesn't exist yet.
+# The "Ensure gh-pages branch exists" step below creates it (an empty
+# orphan branch) so the very first run doesn't fail on this.
 
 on:
   push:
@@ -40,6 +46,16 @@ jobs:
 
       - name: Install Helm
         uses: azure/setup-helm@v4
+
+      - name: Ensure gh-pages branch exists
+        run: |
+          if ! git ls-remote --exit-code --heads origin gh-pages > /dev/null; then
+            git checkout --orphan gh-pages
+            git reset --hard
+            git commit --allow-empty -m "Initialize gh-pages branch"
+            git push origin gh-pages
+            git checkout "$GITHUB_REF_NAME"
+          fi
 
       - name: Run chart-releaser
         uses: helm/chart-releaser-action@v1.6.0
