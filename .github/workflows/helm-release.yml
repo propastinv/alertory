@@ -1,0 +1,52 @@
+name: Release Helm chart
+
+# Publishes charts/alertory as a proper Helm repository hosted on GitHub
+# Pages, so `helm repo add alertory https://<owner>.github.io/<repo>`
+# works. chart-releaser only packages+publishes a chart whose version
+# (Chart.yaml) doesn't already have a matching GitHub release/tag, so
+# bumping charts/alertory/Chart.yaml's `version` is what triggers a
+# publish - pushing app changes without a chart version bump does not
+# re-publish anything.
+#
+# One-time repo setup required before this works:
+#   - Settings -> Pages -> Deploy from a branch -> gh-pages / (root)
+#   - An (initially empty) orphan `gh-pages` branch must exist; the
+#     first run of chart-releaser creates it automatically.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "charts/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Add bitnami repo (for the optional postgresql dependency)
+        run: helm repo add bitnami https://charts.bitnami.com/bitnami
+
+      - name: Run chart-releaser
+        uses: helm/chart-releaser-action@v1.6.0
+        with:
+          charts_dir: charts
+        env:
+          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
