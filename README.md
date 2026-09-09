@@ -71,7 +71,7 @@ receivers:
 
 ### Running with Docker
 
-Prebuilt images are published to `ghcr.io/propastinv/alertory` on every version bump:
+Prebuilt images are published to `ghcr.io/propastinv/alertory` on every tagged release (see [`CONTRIBUTING.md`](CONTRIBUTING.md#releasing)):
 
 ```bash
 docker run -p 8080:8080 \

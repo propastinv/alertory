@@ -1,30 +1,18 @@
 name: Release Helm chart
 
-# Publishes charts/alertory as a proper Helm repository hosted on GitHub
-# Pages, so `helm repo add alertory https://<owner>.github.io/<repo>`
-# works. chart-releaser only packages+publishes a chart whose version
-# (Chart.yaml) doesn't already have a matching GitHub release/tag, so
-# bumping charts/alertory/Chart.yaml's `version` is what triggers a
-# publish - pushing app changes without a chart version bump does not
-# re-publish anything.
+# vX.Y.Z (app release): bumps appVersion to match, chart version gets
+# an automatic patch bump.
+# chart-vX.Y.Z (chart-only release): chart version is set to exactly
+# what's in the tag, appVersion untouched.
 #
-# One-time repo setup required before this works:
-#   - Settings -> Pages -> Deploy from a branch -> gh-pages / (root)
-#     (only selectable once the branch below actually exists)
-#
-# Despite what an earlier version of this comment claimed, cr index
-# does NOT create the gh-pages branch itself - `cr index --push` does
-# a `git worktree add ... origin/gh-pages`, which fails with "fatal:
-# invalid reference: origin/gh-pages" if that ref doesn't exist yet.
-# The "Ensure gh-pages branch exists" step below creates it (an empty
-# orphan branch) so the very first run doesn't fail on this.
+# One-time setup: Settings -> Pages -> Deploy from a branch -> gh-pages
+# (only selectable once that branch exists - see the step below).
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - "charts/**"
+    tags:
+      - "v*"
+      - "chart-v*"
   workflow_dispatch:
 
 permissions:
@@ -44,22 +32,48 @@ jobs:
           git config user.name "$GITHUB_ACTOR"
           git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
 
+      - name: Bump chart version and appVersion
+        run: |
+          set -euo pipefail
+          ref="$GITHUB_REF_NAME"
+
+          if [[ "$ref" == chart-v* ]]; then
+            new_chart_version="${ref#chart-v}"
+            sed -i "s/^version: .*/version: $new_chart_version/" charts/alertory/Chart.yaml
+            commit_msg="chore(chart): release $new_chart_version (chart-only)"
+          else
+            app_version="${ref#v}"
+            chart_version=$(grep '^version:' charts/alertory/Chart.yaml | awk '{print $2}')
+            IFS='.' read -r major minor patch <<< "$chart_version"
+            new_chart_version="$major.$minor.$((patch + 1))"
+
+            sed -i "s/^version: .*/version: $new_chart_version/" charts/alertory/Chart.yaml
+            sed -i "s/^appVersion: .*/appVersion: \"$app_version\"/" charts/alertory/Chart.yaml
+            commit_msg="chore(chart): release $new_chart_version for app $ref"
+          fi
+
+          git add charts/alertory/Chart.yaml
+          git commit -m "$commit_msg"
+          git push origin HEAD:main
+
       - name: Install Helm
         uses: azure/setup-helm@v4
 
       - name: Ensure gh-pages branch exists
         run: |
           if ! git ls-remote --exit-code --heads origin gh-pages > /dev/null; then
+            orig_ref=$(git rev-parse HEAD)
             git checkout --orphan gh-pages
             git reset --hard
             git commit --allow-empty -m "Initialize gh-pages branch"
             git push origin gh-pages
-            git checkout "$GITHUB_REF_NAME"
+            git checkout "$orig_ref"
           fi
 
       - name: Run chart-releaser
         uses: helm/chart-releaser-action@v1.6.0
         with:
           charts_dir: charts
+          skip_existing: true
         env:
           CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
