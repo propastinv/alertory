@@ -87,16 +87,14 @@ affinity: {}
 
 livenessProbe:
   httpGet:
-    path: /api/v1/alerts
+    path: /healthz
     port: http
-  # An empty POST-only route returns 400 (not the 404 a wrong path would),
-  # which is enough to prove the process is up and serving.
   initialDelaySeconds: 5
   periodSeconds: 15
 
 readinessProbe:
   httpGet:
-    path: /api/v1/alerts
+    path: /healthz
     port: http
   initialDelaySeconds: 5
   periodSeconds: 10
@@ -137,20 +135,32 @@ secret:
     OIDC_CLIENT_ID: ""
     OIDC_CLIENT_SECRET: ""
 
-# Bundled Postgres (bitnami/postgresql subchart) for a quick start. For a
+# Bundled Postgres for a quick start: a single-replica StatefulSet
+# running plain `postgres:<tag>` (no bitnami/any third-party chart
+# dependency - just an image and a PVC we template ourselves). For a
 # real deployment, set this to false and point `secret.data.DATABASE_URL`
 # (or your existingSecret) at a managed/external Postgres instead - this
-# chart's own copy has no backup story.
+# has no HA, no backups, no failover: single pod, single volume.
 postgresql:
   enabled: false
+  image:
+    repository: postgres
+    tag: "16-alpine"
   auth:
     username: alertory
     password: alertory
     database: alertory
-  primary:
-    persistence:
-      enabled: true
-      size: 2Gi
+  persistence:
+    enabled: true
+    size: 2Gi
+    storageClassName: ""
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
 
 # Only used when postgresql.enabled is true, to build DATABASE_URL for
 # the bundled instance automatically.

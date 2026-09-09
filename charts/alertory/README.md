@@ -15,7 +15,6 @@ helm install alertory alertory/alertory -n alertory --create-namespace -f my-val
 Or straight from a checked-out clone of this repo:
 
 ```bash
-helm dependency update charts/alertory   # only needed if postgresql.enabled=true
 helm install alertory charts/alertory -n alertory --create-namespace -f my-values.yaml
 ```
 
@@ -67,7 +66,7 @@ Whichever host resolves to `/ui` in a browser must match `config.APP_URL` - it's
 
 ## Bundled Postgres
 
-Set `postgresql.enabled: true` to deploy [bitnami/postgresql](https://github.com/bitnami/charts/tree/main/bitnami/postgresql) as a dependency and have `DATABASE_URL` wired up automatically - convenient for a demo/eval, but it has no backup/HA story. For anything real, point `secret.data.DATABASE_URL` (or `secret.existingSecret`) at a managed Postgres instance instead and leave `postgresql.enabled: false`.
+Set `postgresql.enabled: true` to get a single-replica Postgres `StatefulSet` (plain `postgres:16-alpine`, no bitnami or any other third-party chart dependency - just an image and a `PersistentVolumeClaim` this chart templates itself) with `DATABASE_URL` wired up automatically. Convenient for a demo/eval, but it's exactly that: one pod, one volume, no backups, no HA, no failover. For anything real, point `secret.data.DATABASE_URL` (or `secret.existingSecret`) at a managed Postgres instance instead and leave `postgresql.enabled: false`.
 
 ## Values
 
