@@ -6,7 +6,6 @@ import (
 	"html/template"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -126,7 +125,7 @@ func newRuleFormHandler(tmpl *template.Template) http.Handler {
 			Active:     "rules",
 			User:       currentUser(r),
 			CSRFToken:  csrfToken(r),
-			FormAction: "/rules",
+			FormAction: "/ui/rules",
 			Submit:     "Create rule",
 			Enabled:    true,
 		})
@@ -156,7 +155,7 @@ func editRuleFormHandler(pool *pgxpool.Pool, tmpl *template.Template) http.Handl
 			Active:           "rules",
 			User:             currentUser(r),
 			CSRFToken:        csrfToken(r),
-			FormAction:       fmt.Sprintf("/rules/%d", id),
+			FormAction:       fmt.Sprintf("/ui/rules/%d", id),
 			Submit:           "Save changes",
 			ID:               id,
 			Name:             rule.Name,
@@ -224,7 +223,7 @@ func saveRuleHandler(pool *pgxpool.Pool) http.Handler {
 			return
 		}
 
-		http.Redirect(w, r, "/rules", http.StatusFound)
+		http.Redirect(w, r, "/ui/rules", http.StatusFound)
 	})
 }
 
@@ -249,7 +248,7 @@ func deleteRuleHandler(pool *pgxpool.Pool) http.Handler {
 			http.Error(w, "failed to delete rule", http.StatusInternalServerError)
 			return
 		}
-		http.Redirect(w, r, "/rules", http.StatusFound)
+		http.Redirect(w, r, "/ui/rules", http.StatusFound)
 	})
 }
 
@@ -261,29 +260,27 @@ func settingsHandler(pool *pgxpool.Pool, tmpl *template.Template) http.Handler {
 		clientID := os.Getenv("SLACK_CLIENT_ID")
 		appURL := os.Getenv("APP_URL")
 
-		var authorizeURL string
-		if clientID != "" && appURL != "" {
-			redirect := appURL + "/providers/oauth2/slack"
-			authorizeURL = "https://slack.com/oauth/v2/authorize?client_id=" + url.QueryEscape(clientID) +
-				"&scope=chat:write&redirect_uri=" + url.QueryEscape(redirect)
-		}
+		// The actual authorize URL (with its CSRF state param) is built by
+		// SlackAuthorizeHandler at /ui/providers/oauth2/slack/authorize;
+		// this just decides whether to show the "Connect Slack" link.
+		connectAvailable := clientID != "" && appURL != ""
 
 		data := struct {
-			Active          string
-			User            string
-			Connected       bool
-			TeamName        string
-			AuthorizeURL    string
-			Retention       string
-			CleanupInterval string
+			Active           string
+			User             string
+			Connected        bool
+			TeamName         string
+			ConnectAvailable bool
+			Retention        string
+			CleanupInterval  string
 		}{
-			Active:          "settings",
-			User:            currentUser(r),
-			Connected:       token != "",
-			TeamName:        teamName,
-			AuthorizeURL:    authorizeURL,
-			Retention:       envOrDefault("ALERT_RETENTION", "168h"),
-			CleanupInterval: envOrDefault("CLEANUP_INTERVAL", "1h"),
+			Active:           "settings",
+			User:             currentUser(r),
+			Connected:        token != "",
+			TeamName:         teamName,
+			ConnectAvailable: connectAvailable,
+			Retention:        envOrDefault("ALERT_RETENTION", "168h"),
+			CleanupInterval:  envOrDefault("CLEANUP_INTERVAL", "1h"),
 		}
 		renderPage(w, tmpl, data)
 	})
