@@ -102,7 +102,18 @@ docker run -p 8080:8080 \
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) - how a webhook call turns into a Slack message, and the Postgres schema behind it
 - [`docs/RULES.md`](docs/RULES.md) - everything a routing rule can do: matching, grouping, multi-channel, enrichments, notification-only
 - [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) - every environment variable, Slack OAuth setup, and SSO setup
+- [`charts/alertory`](charts/alertory) - the Helm chart, including how to split the public webhook and the SSO-gated `/ui` admin UI across separate Ingresses
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) - local dev setup and how to send a PR
+
+## Running on Kubernetes
+
+```bash
+helm repo add alertory https://propastinv.github.io/alertory
+helm repo update
+helm install alertory alertory/alertory -n alertory --create-namespace -f my-values.yaml
+```
+
+See [`charts/alertory/README.md`](charts/alertory/README.md) for required values and how the chart splits the webhook and admin UI into separate Ingresses.
 
 ## Status
 
