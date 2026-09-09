@@ -50,7 +50,9 @@ curl -X POST localhost:8080/api/v1/alerts \
 
 ## Releasing
 
-Releases are cut by pushing a tag, not by merging anything special:
+Releases are cut by pushing a tag, not by merging anything special. There are two independent kinds of release:
+
+### App release
 
 ```bash
 git tag v0.0.23
@@ -60,9 +62,20 @@ git push origin v0.0.23
 That single push (must point at a commit already on `main`) triggers two workflows:
 
 - [`build.yml`](.github/workflows/build.yml) builds and pushes `ghcr.io/propastinv/alertory:0.0.23` (and re-tags `:latest`).
-- [`helm-release.yml`](.github/workflows/helm-release.yml) bumps [`charts/alertory/Chart.yaml`](charts/alertory/Chart.yaml)'s `appVersion` to `0.0.23` and its own `version` (a patch bump, independent of the app's version number - it has to keep increasing on its own regardless of what the app is tagged, or `helm repo update`/Renovate/anyone pinned to "latest" chart version won't see anything new to pick up), commits that bump to `main`, and publishes the chart to the [Helm repo](charts/alertory/README.md).
+- [`helm-release.yml`](.github/workflows/helm-release.yml) bumps [`charts/alertory/Chart.yaml`](charts/alertory/Chart.yaml)'s `appVersion` to `0.0.23`, gives the chart's own `version` an automatic patch bump (independent of the app's version number - it just has to keep increasing on its own, e.g. `0.1.9` -> `0.1.10`, regardless of what the app is tagged), commits that to `main`, and publishes the chart to the [Helm repo](charts/alertory/README.md).
 
-Both are gated behind [`ci.yml`](.github/workflows/ci.yml) passing on `main` first (build/vet/gofmt/helm-lint) - make sure the commit you're tagging is one where that's green.
+### Chart-only release
+
+For a change that's only under `charts/` (a values default, a template fix, an Ingress tweak) with no app change behind it - so there's no app version to bump:
+
+```bash
+git tag chart-v0.2.0
+git push origin chart-v0.2.0
+```
+
+This only triggers `helm-release.yml`, and only for the chart: `charts/alertory/Chart.yaml`'s `version` is set to exactly what you put in the tag (bump whatever component makes sense - major, minor, or patch, your call, not forced to a patch-only increment), and `appVersion` is left alone since no new app version actually shipped.
+
+Both flows are gated behind [`ci.yml`](.github/workflows/ci.yml) passing on `main` first (build/vet/gofmt/helm-lint) - make sure the commit you're tagging is one where that's green.
 
 ## Reporting bugs / requesting features
 

@@ -1,19 +1,23 @@
 name: Release Helm chart
 
-# Runs on the same `vX.Y.Z` tag push as build.yml - one manual action
-# (`git tag vX.Y.Z && git push origin vX.Y.Z`) ships both the app's
-# Docker image and a matching Helm chart release, so a cluster running
-# via this chart can actually pick up the new app version.
+# Two different things can trigger this, and they behave differently:
 #
-# Bumping only the chart's `appVersion` here would NOT be enough for
-# that: `helm repo update`, `helm upgrade` without --version, and tools
-# like Renovate all key off the chart's own `version` field in the
-# published index - appVersion is just a label shown by `helm show
-# chart`, nothing consults it to decide there's an update. So every
-# run bumps `version` too (a plain patch increment, kept independent
-# of the app's own tag numbering - it must stay monotonically
-# increasing across releases regardless of what number the app happens
-# to be tagged with) alongside `appVersion` (set to match the tag).
+#   - `vX.Y.Z` (same tag build.yml reacts to): an app release. Bumps
+#     the chart's `appVersion` to match the app tag, AND bumps the
+#     chart's own `version` with an automatic patch increment (its
+#     numbering is independent of the app's - it just has to keep
+#     going up on its own, regardless of what the app happens to be
+#     tagged). Bumping only appVersion would NOT be enough for anyone
+#     to notice an update: `helm repo update`, `helm upgrade` without
+#     --version, and Renovate all key off the chart's own `version` in
+#     the published index, nothing consults appVersion to decide
+#     there's something new.
+#
+#   - `chart-vX.Y.Z`: a chart-only release - values/templates/ingress
+#     changes with no app change behind them. The chart's `version` is
+#     set to exactly what's in the tag (chosen by hand - bump whatever
+#     component makes sense, not just patch), and `appVersion` is left
+#     untouched since no new app version actually shipped.
 #
 # One-time repo setup required before this works:
 #   - Settings -> Pages -> Deploy from a branch -> gh-pages / (root)
@@ -29,6 +33,7 @@ on:
   push:
     tags:
       - "v*"
+      - "chart-v*"
   workflow_dispatch:
 
 permissions:
@@ -51,17 +56,32 @@ jobs:
       - name: Bump chart version and appVersion
         run: |
           set -euo pipefail
-          app_version="${GITHUB_REF_NAME#v}"
+          ref="$GITHUB_REF_NAME"
 
-          chart_version=$(grep '^version:' charts/alertory/Chart.yaml | awk '{print $2}')
-          IFS='.' read -r major minor patch <<< "$chart_version"
-          new_chart_version="$major.$minor.$((patch + 1))"
+          if [[ "$ref" == chart-v* ]]; then
+            # Chart-only release: the tag itself IS the new chart
+            # version, picked by hand - any component (major/minor/
+            # patch) may change. appVersion is untouched.
+            new_chart_version="${ref#chart-v}"
+            sed -i "s/^version: .*/version: $new_chart_version/" charts/alertory/Chart.yaml
+            commit_msg="chore(chart): release $new_chart_version (chart-only)"
+          else
+            # App release: appVersion follows the app tag; the chart's
+            # own version gets an automatic patch bump. Plain integer
+            # arithmetic, so 9->10, 99->100, etc. "just work" - no
+            # special-casing needed for the rollover.
+            app_version="${ref#v}"
+            chart_version=$(grep '^version:' charts/alertory/Chart.yaml | awk '{print $2}')
+            IFS='.' read -r major minor patch <<< "$chart_version"
+            new_chart_version="$major.$minor.$((patch + 1))"
 
-          sed -i "s/^version: .*/version: $new_chart_version/" charts/alertory/Chart.yaml
-          sed -i "s/^appVersion: .*/appVersion: \"$app_version\"/" charts/alertory/Chart.yaml
+            sed -i "s/^version: .*/version: $new_chart_version/" charts/alertory/Chart.yaml
+            sed -i "s/^appVersion: .*/appVersion: \"$app_version\"/" charts/alertory/Chart.yaml
+            commit_msg="chore(chart): release $new_chart_version for app $ref"
+          fi
 
           git add charts/alertory/Chart.yaml
-          git commit -m "chore(chart): release $new_chart_version for app $GITHUB_REF_NAME"
+          git commit -m "$commit_msg"
           git push origin HEAD:main
 
       - name: Install Helm

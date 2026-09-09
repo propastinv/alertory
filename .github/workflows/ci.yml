@@ -6,7 +6,8 @@ name: CI
 # separate from build.yml/helm-release.yml: those publish a Docker
 # image and a Helm chart release - one-way, hard-to-undo actions that
 # must never run as a side effect of a routine PR/merge, only when a
-# `vX.Y.Z` tag is pushed on purpose.
+# `vX.Y.Z` (app release) or `chart-vX.Y.Z` (chart-only release) tag is
+# pushed on purpose.
 
 on:
   pull_request:
