@@ -1,0 +1,26 @@
+apiVersion: v1
+entries:
+  alertory:
+  - apiVersion: v2
+    appVersion: 0.0.22
+    created: "2026-09-09T07:57:03.164559526Z"
+    description: Alertmanager fires. alertory dedupes, groups, and turns the mess
+      into Slack messages that don't spam your team.
+    digest: dfeb537445f7f4755c1db340fd2c1596c41950dc55f805f8b43cda373132bca6
+    home: https://github.com/propastinv/alertory
+    keywords:
+    - alertmanager
+    - slack
+    - alerting
+    - prometheus
+    maintainers:
+    - name: Vyacheslav Propastin
+      url: https://github.com/propastinv
+    name: alertory
+    sources:
+    - https://github.com/propastinv/alertory
+    type: application
+    urls:
+    - https://github.com/propastinv/alertory/releases/download/alertory-0.1.1/alertory-0.1.1.tgz
+    version: 0.1.1
+generated: "2026-09-09T07:57:03.1645647Z"
