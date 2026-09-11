@@ -3,7 +3,7 @@ name: alertory
 description: Alertmanager fires. alertory dedupes, groups, and turns the mess into Slack messages that don't spam your team.
 type: application
 version: 0.1.5
-appVersion: "main"
+appVersion: "0.0.28"
 home: https://github.com/propastinv/alertory
 sources:
   - https://github.com/propastinv/alertory
