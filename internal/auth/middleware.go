@@ -52,7 +52,7 @@ func RequireAuth(pool *pgxpool.Pool, next http.Handler) http.Handler {
 }
 
 func redirectToLogin(w http.ResponseWriter, r *http.Request) {
-	http.Redirect(w, r, "/auth/login?return_to="+url.QueryEscape(r.URL.Path), http.StatusFound)
+	http.Redirect(w, r, "/ui/auth/login?return_to="+url.QueryEscape(r.URL.Path), http.StatusFound)
 }
 
 // FromContext returns the authenticated session for a request, if any.
