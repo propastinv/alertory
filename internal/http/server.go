@@ -109,7 +109,7 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "same-origin")
 		h.Set("Content-Security-Policy",
 			"default-src 'self'; "+
-				"script-src 'self' https://cdn.tailwindcss.com; "+
+				"script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; "+
 				"style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; "+
 				"img-src 'self' data:; "+
 				"frame-ancestors 'none'; "+
