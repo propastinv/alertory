@@ -1,12 +1,13 @@
-name: Release Helm chart
+name: Bump Helm chart version
 
 # vX.Y.Z (app release): bumps appVersion to match, chart version gets
 # an automatic patch bump.
 # chart-vX.Y.Z (chart-only release): chart version is set to exactly
 # what's in the tag, appVersion untouched.
 #
-# One-time setup: Settings -> Pages -> Deploy from a branch -> gh-pages
-# (only selectable once that branch exists - see the step below).
+# Opens a PR with the Chart.yaml bump instead of pushing to main
+# directly, since main is rule-protected. Merging that PR is what
+# actually triggers the publish (see helm-publish.yml).
 
 on:
   push:
@@ -20,7 +21,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  release:
+  bump:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -57,6 +58,7 @@ jobs:
           echo "new_chart_version=$new_chart_version" >> "$GITHUB_ENV"
 
       - name: Open PR with chart bump
+        id: chart-pr
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -66,25 +68,3 @@ jobs:
           base: main
           delete-branch: true
           add-paths: charts/alertory/Chart.yaml
-
-      - name: Install Helm
-        uses: azure/setup-helm@v4
-
-      - name: Ensure gh-pages branch exists
-        run: |
-          if ! git ls-remote --exit-code --heads origin gh-pages > /dev/null; then
-            orig_ref=$(git rev-parse HEAD)
-            git checkout --orphan gh-pages
-            git reset --hard
-            git commit --allow-empty -m "Initialize gh-pages branch"
-            git push origin gh-pages
-            git checkout "$orig_ref"
-          fi
-
-      - name: Run chart-releaser
-        uses: helm/chart-releaser-action@v1.6.0
-        with:
-          charts_dir: charts
-          skip_existing: true
-        env:
-          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
