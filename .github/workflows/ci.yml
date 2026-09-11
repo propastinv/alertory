@@ -36,7 +36,7 @@ jobs:
           fi
 
       - name: Install Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
 
       - name: Helm lint
         run: helm lint --strict charts/alertory
