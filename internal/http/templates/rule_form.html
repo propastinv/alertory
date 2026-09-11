@@ -1,84 +1,84 @@
 {{define "content"}}
 <h1 class="text-xl font-semibold mb-6">{{.Submit}}</h1>
 
-<form method="post" action="{{.FormAction}}" class="bg-white rounded-lg shadow-sm border border-slate-200 p-6 space-y-5 max-w-2xl">
+<form method="post" action="{{.FormAction}}" class="bg-white dark:bg-slate-900 rounded-lg shadow-sm border border-slate-200 dark:border-slate-800 p-6 space-y-5 max-w-2xl">
   <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
   <div>
     <label class="block text-sm font-medium mb-1">Name</label>
     <input name="name" value="{{.Name}}" required
-           class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
+           class="w-full rounded-md border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
   </div>
 
   <div>
     <label class="block text-sm font-medium mb-1">Slack channel ID(s)</label>
     <input name="channel" value="{{.Channel}}" required placeholder="C0123456, U0123456"
-           class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
-    <p class="text-xs text-slate-400 mt-1">A channel or user ID. Separate several with commas to notify more than one channel/person - each gets its own message.</p>
+           class="w-full rounded-md border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
+    <p class="text-xs text-slate-400 dark:text-slate-500 mt-1">A channel or user ID. Separate several with commas to notify more than one channel/person - each gets its own message.</p>
   </div>
 
   <div>
     <label class="block text-sm font-medium mb-1">Team</label>
     <input name="team" value="{{.Team}}" placeholder="e.g. Infra"
-           class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
-    <p class="text-xs text-slate-400 mt-1">Shown as a fixed "Team" field on every Slack message from this rule.</p>
+           class="w-full rounded-md border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
+    <p class="text-xs text-slate-400 dark:text-slate-500 mt-1">Shown as a fixed "Team" field on every Slack message from this rule.</p>
   </div>
 
   <div>
     <label class="block text-sm font-medium mb-1">Target label</label>
     <input name="target_label" value="{{.TargetLabel}}" placeholder="e.g. login, instance, host"
-           class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
-    <p class="text-xs text-slate-400 mt-1">Which alert label identifies the affected target; shown as "Target" in Slack.</p>
+           class="w-full rounded-md border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
+    <p class="text-xs text-slate-400 dark:text-slate-500 mt-1">Which alert label identifies the affected target; shown as "Target" in Slack.</p>
   </div>
 
   <div>
     <label class="block text-sm font-medium mb-1">Match labels</label>
     <textarea name="match_labels" rows="3" placeholder="namespace=external-monitoring&#10;job=health"
-              class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-slate-400">{{.MatchLabels}}</textarea>
-    <p class="text-xs text-slate-400 mt-1">One "key=value" per line. An alert must match all of them.</p>
+              class="w-full rounded-md border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-slate-400">{{.MatchLabels}}</textarea>
+    <p class="text-xs text-slate-400 dark:text-slate-500 mt-1">One "key=value" per line. An alert must match all of them.</p>
   </div>
 
   <div>
     <label class="block text-sm font-medium mb-1">Group by</label>
     <input name="group_by" value="{{.GroupBy}}" placeholder="alertname, instance"
-           class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
-    <p class="text-xs text-slate-400 mt-1">Comma-separated label names. Alerts sharing these values collapse into one Slack message. Leave empty to group by alertname.</p>
+           class="w-full rounded-md border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
+    <p class="text-xs text-slate-400 dark:text-slate-500 mt-1">Comma-separated label names. Alerts sharing these values collapse into one Slack message. Leave empty to group by alertname.</p>
   </div>
 
   <div>
     <label class="block text-sm font-medium mb-1">Extra fields</label>
     <textarea name="extra_fields" rows="3" placeholder="Email=email&#10;Title=title"
-              class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-slate-400">{{.ExtraFields}}</textarea>
-    <p class="text-xs text-slate-400 mt-1">One "Field label=key" per line. The key is looked up in the alert's annotations, then its labels. Only these values are shown on the Slack card - anything else (e.g. a raw email body) stays out.</p>
+              class="w-full rounded-md border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-slate-400">{{.ExtraFields}}</textarea>
+    <p class="text-xs text-slate-400 dark:text-slate-500 mt-1">One "Field label=key" per line. The key is looked up in the alert's annotations, then its labels. Only these values are shown on the Slack card - anything else (e.g. a raw email body) stays out.</p>
   </div>
 
   <div>
     <label class="block text-sm font-medium mb-1">Enrichments (advanced, JSON)</label>
     <textarea name="enrichments" rows="6" placeholder="[]"
-              class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-slate-400">{{.Enrichments}}</textarea>
-    <p class="text-xs text-slate-400 mt-1">Optional HTTP lookups run before an alert is grouped. Leave empty for none.</p>
+              class="w-full rounded-md border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-slate-400">{{.Enrichments}}</textarea>
+    <p class="text-xs text-slate-400 dark:text-slate-500 mt-1">Optional HTTP lookups run before an alert is grouped. Leave empty for none.</p>
   </div>
 
   <div>
     <label class="block text-sm font-medium mb-1">Display title</label>
     <input name="display_title" value="{{.DisplayTitle}}" placeholder="e.g. {{"{{"}} .Labels.match {{"}}"}}"
-           class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
-    <p class="text-xs text-slate-400 mt-1">Overrides the alertname as the Slack message header. Static text, or a per-alert template: <code>{{"{{"}} .Labels.NAME {{"}}"}}</code> / <code>{{"{{"}} .Annotations.NAME {{"}}"}}</code>. Leave empty to use alertname.</p>
+           class="w-full rounded-md border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
+    <p class="text-xs text-slate-400 dark:text-slate-500 mt-1">Overrides the alertname as the Slack message header. Static text, or a per-alert template: <code>{{"{{"}} .Labels.NAME {{"}}"}}</code> / <code>{{"{{"}} .Annotations.NAME {{"}}"}}</code>. Leave empty to use alertname.</p>
   </div>
 
   <label class="flex items-center gap-2 text-sm">
-    <input type="checkbox" name="notification_only" {{if .NotificationOnly}}checked{{end}} class="rounded border-slate-300">
+    <input type="checkbox" name="notification_only" {{if .NotificationOnly}}checked{{end}} class="rounded border-slate-300 dark:border-slate-600">
     Notification only
   </label>
-  <p class="text-xs text-slate-400 -mt-3">For sources that aren't real stateful alerts (e.g. forwarded emails): no "resolved" state, no color flip, no Starts/Resolved At timestamps - just sent once as-is.</p>
+  <p class="text-xs text-slate-400 dark:text-slate-500 -mt-3">For sources that aren't real stateful alerts (e.g. forwarded emails): no "resolved" state, no color flip, no Starts/Resolved At timestamps - just sent once as-is.</p>
 
   <label class="flex items-center gap-2 text-sm">
-    <input type="checkbox" name="enabled" {{if .Enabled}}checked{{end}} class="rounded border-slate-300">
+    <input type="checkbox" name="enabled" {{if .Enabled}}checked{{end}} class="rounded border-slate-300 dark:border-slate-600">
     Enabled
   </label>
 
   <div class="flex gap-3 pt-2">
-    <button type="submit" class="px-4 py-1.5 rounded-md bg-slate-900 text-white text-sm font-medium hover:bg-slate-700">{{.Submit}}</button>
-    <a href="/ui/rules" class="px-4 py-1.5 rounded-md bg-slate-100 text-slate-700 text-sm font-medium hover:bg-slate-200">Cancel</a>
+    <button type="submit" class="px-4 py-1.5 rounded-md bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 text-sm font-medium hover:bg-slate-700 dark:hover:bg-slate-300">{{.Submit}}</button>
+    <a href="/ui/rules" class="px-4 py-1.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-sm font-medium hover:bg-slate-200 dark:hover:bg-slate-700">Cancel</a>
   </div>
 </form>
 {{end}}

@@ -3,8 +3,10 @@ package http
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -31,15 +33,9 @@ import (
 // Alertmanager to retry and pile on more load.
 func AlertsHandler(pool *pgxpool.Pool, rules *workflows.RuleStore, token string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if token != "" {
-			// Constant-time compare: a plain != leaks how many leading
-			// bytes of the token guessed correctly via response timing.
-			supplied := r.Header.Get("Authorization")
-			expected := "Bearer " + token
-			if len(supplied) != len(expected) || subtle.ConstantTimeCompare([]byte(supplied), []byte(expected)) != 1 {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
+		if !checkWebhookAuth(r, pool, token) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
 		}
 
 		var payload models.WebhookPayload
@@ -236,4 +232,57 @@ func randomToken(nBytes int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// hashAPIKey hashes a raw API key for storage/lookup. SHA-256 (not
+// bcrypt/scrypt) is enough here because the input is already a
+// high-entropy random token, not a user-chosen password - there's
+// nothing for an attacker to brute-force via a fast hash.
+func hashAPIKey(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])
+}
+
+// checkWebhookAuth authorizes an /api/v1/alerts request against the
+// static BEARER_TOKEN (if set) or any issued API key. Once at least one
+// API key exists, the endpoint requires auth even if BEARER_TOKEN was
+// never set, since generating a key is an explicit signal that the
+// deployment wants this endpoint locked down.
+func checkWebhookAuth(r *http.Request, pool *pgxpool.Pool, token string) bool {
+	const prefix = "Bearer "
+	supplied := r.Header.Get("Authorization")
+	suppliedKey := strings.TrimPrefix(supplied, prefix)
+
+	if token != "" {
+		expected := prefix + token
+		// Constant-time compare: a plain != leaks how many leading bytes
+		// of the token guessed correctly via response timing.
+		if len(supplied) == len(expected) && subtle.ConstantTimeCompare([]byte(supplied), []byte(expected)) == 1 {
+			return true
+		}
+	}
+
+	if !strings.HasPrefix(supplied, prefix) || suppliedKey == "" {
+		return token == "" && !anyAPIKeysExist(r.Context(), pool)
+	}
+
+	ok, err := db.APIKeyExists(r.Context(), pool, hashAPIKey(suppliedKey))
+	if err != nil {
+		log.Printf("failed to check API key: %v", err)
+		return false
+	}
+	if ok {
+		return true
+	}
+
+	return token == "" && !anyAPIKeysExist(r.Context(), pool)
+}
+
+func anyAPIKeysExist(ctx context.Context, pool *pgxpool.Pool) bool {
+	n, err := db.CountAPIKeys(ctx, pool)
+	if err != nil {
+		log.Printf("failed to count API keys: %v", err)
+		return true // fail closed
+	}
+	return n > 0
 }

@@ -18,6 +18,7 @@ type pageTemplates struct {
 	rulesList *template.Template
 	ruleForm  *template.Template
 	settings  *template.Template
+	apiKeys   *template.Template
 }
 
 func loadTemplates() (*pageTemplates, error) {
@@ -41,11 +42,16 @@ func loadTemplates() (*pageTemplates, error) {
 	if err != nil {
 		return nil, err
 	}
+	apiKeys, err := build("api_keys.html")
+	if err != nil {
+		return nil, err
+	}
 
 	return &pageTemplates{
 		dashboard: dashboard,
 		rulesList: rulesList,
 		ruleForm:  ruleForm,
 		settings:  settings,
+		apiKeys:   apiKeys,
 	}, nil
 }

@@ -90,6 +90,10 @@ func NewServer(pool *pgxpool.Pool, rules *workflows.RuleStore, authSvc *auth.Ser
 
 	mux.Handle("GET /ui/settings", auth.RequireAuth(pool, settingsHandler(pool, tmpl.settings)))
 
+	mux.Handle("GET /ui/api-keys", auth.RequireAuth(pool, apiKeysListHandler(pool, tmpl.apiKeys)))
+	mux.Handle("POST /ui/api-keys", auth.RequireAuth(pool, createAPIKeyHandler(pool, tmpl.apiKeys)))
+	mux.Handle("POST /ui/api-keys/{id}/delete", auth.RequireAuth(pool, deleteAPIKeyHandler(pool)))
+
 	return securityHeaders(mux)
 }
 
@@ -105,7 +109,7 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "same-origin")
 		h.Set("Content-Security-Policy",
 			"default-src 'self'; "+
-				"script-src 'self' https://cdn.tailwindcss.com; "+
+				"script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; "+
 				"style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; "+
 				"img-src 'self' data:; "+
 				"frame-ancestors 'none'; "+
