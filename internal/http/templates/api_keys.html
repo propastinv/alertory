@@ -1,0 +1,60 @@
+{{define "content"}}
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-xl font-semibold">API keys</h1>
+</div>
+
+<p class="text-sm text-slate-500 max-w-2xl mb-6">
+  Keys authenticate requests to <span class="font-mono">/api/v1/alerts</span> as an
+  alternative to the static <span class="font-mono">BEARER_TOKEN</span>. Send
+  <span class="font-mono">Authorization: Bearer &lt;key&gt;</span>. Once you create a key,
+  the webhook stops accepting unauthenticated requests even if no
+  <span class="font-mono">BEARER_TOKEN</span> is configured.
+</p>
+
+{{if .NewKey}}
+<div class="bg-amber-50 border border-amber-300 rounded-lg p-4 max-w-2xl mb-6">
+  <p class="text-sm font-medium text-amber-900 mb-2">Copy this key now - it won't be shown again.</p>
+  <code class="block bg-white border border-amber-200 rounded px-3 py-2 text-sm break-all">{{.NewKey}}</code>
+</div>
+{{end}}
+
+<div class="bg-white rounded-lg shadow-sm border border-slate-200 p-6 max-w-2xl mb-6">
+  <h2 class="font-medium mb-3">Create a new key</h2>
+  <form method="post" action="/ui/api-keys" class="flex gap-3">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+    <input type="text" name="name" placeholder="Name (e.g. \"prod alertmanager\")"
+      class="flex-1 border border-slate-300 rounded-md px-3 py-1.5 text-sm">
+    <button type="submit" class="px-4 py-1.5 rounded-md bg-slate-900 text-white text-sm font-medium hover:bg-slate-700">
+      Generate
+    </button>
+  </form>
+</div>
+
+<div class="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden max-w-2xl">
+  <table class="w-full text-sm">
+    <thead class="bg-slate-100 text-slate-600 text-left">
+      <tr>
+        <th class="px-4 py-2 font-medium">Name</th>
+        <th class="px-4 py-2 font-medium">Created</th>
+        <th class="px-4 py-2"></th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-slate-100">
+      {{range .Keys}}
+      <tr>
+        <td class="px-4 py-2 font-medium">{{if .Name}}{{.Name}}{{else}}<span class="text-slate-400">(unnamed)</span>{{end}}</td>
+        <td class="px-4 py-2 text-slate-500">{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+        <td class="px-4 py-2 text-right">
+          <form method="post" action="/ui/api-keys/{{.ID}}/delete" class="inline" onsubmit="return confirm('Revoke this key? Anything using it will stop working immediately.');">
+            <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+            <button type="submit" class="text-red-600 hover:text-red-800 text-xs font-medium">Revoke</button>
+          </form>
+        </td>
+      </tr>
+      {{else}}
+      <tr><td colspan="3" class="px-4 py-8 text-center text-slate-400">No keys yet.</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}

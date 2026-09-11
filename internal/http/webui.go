@@ -286,6 +286,104 @@ func settingsHandler(pool *pgxpool.Pool, tmpl *template.Template) http.Handler {
 	})
 }
 
+type apiKeysData struct {
+	Active    string
+	User      string
+	CSRFToken string
+	Keys      []db.APIKey
+	NewKey    string
+}
+
+func apiKeysListHandler(pool *pgxpool.Pool, tmpl *template.Template) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		keys, err := db.ListAPIKeys(r.Context(), pool)
+		if err != nil {
+			log.Printf("failed to list API keys: %v", err)
+			http.Error(w, "failed to load API keys", http.StatusInternalServerError)
+			return
+		}
+		renderPage(w, tmpl, apiKeysData{
+			Active:    "api-keys",
+			User:      currentUser(r),
+			CSRFToken: csrfToken(r),
+			Keys:      keys,
+		})
+	})
+}
+
+func createAPIKeyHandler(pool *pgxpool.Pool, tmpl *template.Template) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "bad form", http.StatusBadRequest)
+			return
+		}
+		if !auth.CheckCSRF(r) {
+			http.Error(w, "invalid or missing csrf token", http.StatusForbidden)
+			return
+		}
+
+		rawKey, err := randomToken(32)
+		if err != nil {
+			log.Printf("failed to generate API key: %v", err)
+			http.Error(w, "failed to generate key", http.StatusInternalServerError)
+			return
+		}
+
+		id, err := randomToken(16)
+		if err != nil {
+			log.Printf("failed to generate API key id: %v", err)
+			http.Error(w, "failed to generate key", http.StatusInternalServerError)
+			return
+		}
+
+		name := strings.TrimSpace(r.FormValue("name"))
+		if err := db.CreateAPIKey(r.Context(), pool, id, name, hashAPIKey(rawKey)); err != nil {
+			log.Printf("failed to save API key: %v", err)
+			http.Error(w, "failed to save key", http.StatusInternalServerError)
+			return
+		}
+
+		keys, err := db.ListAPIKeys(r.Context(), pool)
+		if err != nil {
+			log.Printf("failed to list API keys: %v", err)
+			http.Error(w, "failed to load API keys", http.StatusInternalServerError)
+			return
+		}
+		renderPage(w, tmpl, apiKeysData{
+			Active:    "api-keys",
+			User:      currentUser(r),
+			CSRFToken: csrfToken(r),
+			Keys:      keys,
+			NewKey:    rawKey,
+		})
+	})
+}
+
+func deleteAPIKeyHandler(pool *pgxpool.Pool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "bad form", http.StatusBadRequest)
+			return
+		}
+		if !auth.CheckCSRF(r) {
+			http.Error(w, "invalid or missing csrf token", http.StatusForbidden)
+			return
+		}
+
+		id := r.PathValue("id")
+		if id == "" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := db.DeleteAPIKey(r.Context(), pool, id); err != nil {
+			log.Printf("failed to delete API key %s: %v", id, err)
+			http.Error(w, "failed to delete key", http.StatusInternalServerError)
+			return
+		}
+		http.Redirect(w, r, "/ui/api-keys", http.StatusFound)
+	})
+}
+
 func envOrDefault(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v

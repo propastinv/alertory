@@ -207,6 +207,19 @@ CREATE TABLE IF NOT EXISTS web_sessions (
 CREATE INDEX IF NOT EXISTS idx_web_sessions_expires
 ON web_sessions(expires_at);
 `,
+		// api_keys backs the webhook's alternative to the single static
+		// BEARER_TOKEN: any number of named keys, each revocable on its own.
+		// Only a SHA-256 hash of the key is ever stored - the raw value is
+		// shown once at creation and can't be recovered afterward, same as
+		// how most API providers hand out keys.
+		`
+CREATE TABLE IF NOT EXISTS api_keys (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL DEFAULT '',
+  key_hash    TEXT NOT NULL UNIQUE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+`,
 	}
 
 	for _, stmt := range stmts {
