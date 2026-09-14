@@ -57,6 +57,26 @@
       });
     })();
   </script>
+  <script>
+    // Server-rendered timestamps are UTC (see internal/db - Postgres
+    // TIMESTAMPTZ columns come back that way). Every such value is marked
+    // up as <time datetime="...Z">SERVER-RENDERED UTC FALLBACK</time>; this
+    // rewrites each one to the viewer's own local time zone, since the
+    // browser is the only place that actually knows it. data-fmt="short"
+    // (e.g. API key "Created" dates) omits seconds, matching what the
+    // server would have rendered for that field.
+    (function () {
+      function pad(n) { return String(n).padStart(2, "0"); }
+      document.querySelectorAll("time[datetime]").forEach(function (el) {
+        var d = new Date(el.getAttribute("datetime"));
+        if (isNaN(d.getTime())) return;
+        var s = d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
+          " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+        if (el.dataset.fmt !== "short") s += ":" + pad(d.getSeconds());
+        el.textContent = s;
+      });
+    })();
+  </script>
 </body>
 </html>
 {{end}}

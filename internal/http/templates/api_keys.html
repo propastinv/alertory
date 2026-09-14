@@ -43,7 +43,7 @@
       {{range .Keys}}
       <tr>
         <td class="px-4 py-2 font-medium">{{if .Name}}{{.Name}}{{else}}<span class="text-slate-400 dark:text-slate-600">(unnamed)</span>{{end}}</td>
-        <td class="px-4 py-2 text-slate-500 dark:text-slate-400">{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+        <td class="px-4 py-2 text-slate-500 dark:text-slate-400"><time datetime="{{.CreatedAt.UTC.Format "2006-01-02T15:04:05Z"}}" data-fmt="short">{{.CreatedAt.UTC.Format "2006-01-02 15:04"}} UTC</time></td>
         <td class="px-4 py-2 text-right">
           <form method="post" action="/ui/api-keys/{{.ID}}/delete" class="inline" onsubmit="return confirm('Revoke this key? Anything using it will stop working immediately.');">
             <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
