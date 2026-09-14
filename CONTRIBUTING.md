@@ -16,7 +16,7 @@ export DATABASE_URL="postgres://alertory:alertory@localhost:5432/alertory?sslmod
 go run ./cmd/app
 ```
 
-The service starts on `:8080`. The `/api/v1/alerts` webhook works immediately (no `BEARER_TOKEN` set means no auth check). The web UI needs OIDC configured to be reachable at all - see [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md#web-ui-auth) - so for UI work, either stand up a local Keycloak or work against the handlers directly.
+The service starts on `:8080`. The `/api/v1/alerts` webhook works immediately (no `BEARER_TOKEN` set means no auth check). The web UI needs OIDC configured to be reachable at all - see [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md#web-ui-auth) - unless you set `DISABLE_AUTH=true`, which serves the UI unauthenticated with no Keycloak/OIDC setup needed. That's local-development-only; never set it anywhere reachable by anyone else.
 
 You can send a test alert straight to the webhook without a real Alertmanager:
 

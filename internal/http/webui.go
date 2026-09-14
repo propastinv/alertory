@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/propastinv/alertory/internal/auth"
@@ -46,24 +47,101 @@ func renderPage(w http.ResponseWriter, tmpl *template.Template, data any) {
 	}
 }
 
+// dashboardPageSize is how many active alerts the dashboard table shows
+// per page.
+const dashboardPageSize = 25
+
+// historyDays mirrors ALERT_RETENTION (falling back to its own 7-day
+// default if that's unset/unparseable): the alert-volume graph only goes
+// back as far as history is actually kept, since a longer window would
+// just show a hard drop-off to zero at the retention cutoff.
+func historyDays() int {
+	retention := 7 * 24 * time.Hour
+	if v := os.Getenv("ALERT_RETENTION"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			retention = d
+		}
+	}
+	days := int(retention.Hours() / 24)
+	if days < 1 {
+		days = 1
+	}
+	return days
+}
+
 type dashboardData struct {
-	Active       string
-	User         string
-	Alerts       []db.ActiveAlertRow
-	StatusFilter string
-	OpenGroups   int
+	Active          string
+	User            string
+	Alerts          []db.ActiveAlertRow
+	StatusFilter    string
+	AlertnameFilter string
+	AlertNames      []string
+	Search          string
+	OpenGroups      int
+
+	Page       int
+	TotalPages int
+	Total      int
+	HasPrev    bool
+	HasNext    bool
+	PrevPage   int
+	NextPage   int
+
+	History           []historyBar
+	HistoryDays       int
+	HistoryFirstLabel string
+	HistoryLastLabel  string
+	TodayCount        int64
+}
+
+// historyBar is one day of the dashboard's alert-volume graph, pre-computed
+// so the template only does rendering, not arithmetic.
+type historyBar struct {
+	Label     string
+	Count     int64
+	HeightPct int
+	Today     bool
 }
 
 func dashboardHandler(pool *pgxpool.Pool, tmpl *template.Template) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		status := r.URL.Query().Get("status")
+		q := r.URL.Query()
 
-		alerts, err := db.ListActiveAlerts(ctx, pool, status, 200)
+		status := q.Get("status")
+		alertname := q.Get("alertname")
+		search := strings.TrimSpace(q.Get("q"))
+
+		page, _ := strconv.Atoi(q.Get("page"))
+		if page < 1 {
+			page = 1
+		}
+		offset := (page - 1) * dashboardPageSize
+
+		filter := db.ActiveAlertFilter{
+			Status:    status,
+			Alertname: alertname,
+			Search:    search,
+		}
+
+		alerts, total, err := db.ListActiveAlerts(ctx, pool, filter, dashboardPageSize, offset)
 		if err != nil {
 			log.Printf("failed to list active alerts: %v", err)
 			http.Error(w, "failed to load alerts", http.StatusInternalServerError)
 			return
+		}
+
+		totalPages := (total + dashboardPageSize - 1) / dashboardPageSize
+		if totalPages < 1 {
+			totalPages = 1
+		}
+		if page > totalPages {
+			page = totalPages
+		}
+
+		alertNames, err := db.ListDistinctAlertnames(ctx, pool)
+		if err != nil {
+			log.Printf("failed to list alert names: %v", err)
 		}
 
 		openGroups, err := db.CountOpenAlertGroups(ctx, pool)
@@ -71,14 +149,75 @@ func dashboardHandler(pool *pgxpool.Pool, tmpl *template.Template) http.Handler 
 			log.Printf("failed to count open alert groups: %v", err)
 		}
 
+		days := historyDays()
+		counts, err := db.CountFiringEventsByDay(ctx, pool, days)
+		if err != nil {
+			log.Printf("failed to load alert history: %v", err)
+		}
+		history := buildHistoryBars(counts)
+
+		var firstLabel, lastLabel string
+		var todayCount int64
+		if len(history) > 0 {
+			firstLabel = history[0].Label
+			lastLabel = history[len(history)-1].Label
+			todayCount = history[len(history)-1].Count
+		}
+
 		renderPage(w, tmpl, dashboardData{
-			Active:       "dashboard",
-			User:         currentUser(r),
-			Alerts:       alerts,
-			StatusFilter: status,
-			OpenGroups:   openGroups,
+			Active:          "dashboard",
+			User:            currentUser(r),
+			Alerts:          alerts,
+			StatusFilter:    status,
+			AlertnameFilter: alertname,
+			AlertNames:      alertNames,
+			Search:          search,
+			OpenGroups:      openGroups,
+
+			Page:       page,
+			TotalPages: totalPages,
+			Total:      total,
+			HasPrev:    page > 1,
+			HasNext:    page < totalPages,
+			PrevPage:   page - 1,
+			NextPage:   page + 1,
+
+			History:           history,
+			HistoryDays:       days,
+			HistoryFirstLabel: firstLabel,
+			HistoryLastLabel:  lastLabel,
+			TodayCount:        todayCount,
 		})
 	})
+}
+
+func buildHistoryBars(counts []db.DailyAlertCount) []historyBar {
+	var max int64
+	for _, c := range counts {
+		if c.Count > max {
+			max = c.Count
+		}
+	}
+	today := time.Now().Format("2006-01-02")
+
+	bars := make([]historyBar, 0, len(counts))
+	for _, c := range counts {
+		heightPct := 0
+		if max > 0 {
+			heightPct = int(c.Count * 100 / max)
+		}
+		if c.Count > 0 && heightPct < 4 {
+			// Keep small nonzero counts visible instead of a sliver.
+			heightPct = 4
+		}
+		bars = append(bars, historyBar{
+			Label:     c.Day.Format("Jan 2"),
+			Count:     c.Count,
+			HeightPct: heightPct,
+			Today:     c.Day.Format("2006-01-02") == today,
+		})
+	}
+	return bars
 }
 
 func rulesListHandler(pool *pgxpool.Pool, tmpl *template.Template) http.Handler {

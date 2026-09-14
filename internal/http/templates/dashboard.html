@@ -1,47 +1,137 @@
+{{/* filterQS renders the current filter set as a trailing query string
+     (leading "&" per param), for links that need to carry filters forward
+     without resubmitting the sidebar form - currently just pagination. */}}
+{{define "filterQS"}}{{if .StatusFilter}}&status={{.StatusFilter}}{{end}}{{if .AlertnameFilter}}&alertname={{.AlertnameFilter}}{{end}}{{if .Search}}&q={{.Search}}{{end}}{{end}}
+
 {{define "content"}}
 <div class="flex items-center justify-between mb-6">
   <h1 class="text-xl font-semibold">Active alerts</h1>
   <div class="text-sm text-slate-500 dark:text-slate-400">{{.OpenGroups}} pending Slack group(s) in flight</div>
 </div>
 
-<div class="mb-4 flex gap-2 text-sm">
-  <a href="/ui/" class="px-3 py-1 rounded-full {{if eq .StatusFilter ""}}bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900{{else}}bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300{{end}}">All</a>
-  <a href="/ui/?status=firing" class="px-3 py-1 rounded-full {{if eq .StatusFilter "firing"}}bg-red-600 text-white{{else}}bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300{{end}}">Firing</a>
-  <a href="/ui/?status=resolved" class="px-3 py-1 rounded-full {{if eq .StatusFilter "resolved"}}bg-emerald-600 text-white{{else}}bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300{{end}}">Resolved</a>
-</div>
+<div class="flex flex-col lg:flex-row gap-6 items-start">
+  <aside class="w-full lg:w-64 flex-shrink-0">
+    <form method="get" action="/ui/" class="bg-white dark:bg-slate-900 rounded-lg shadow-sm border border-slate-200 dark:border-slate-800 p-4 space-y-4">
+      <h2 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Filters</h2>
 
-<div class="bg-white dark:bg-slate-900 rounded-lg shadow-sm border border-slate-200 dark:border-slate-800 overflow-hidden">
-  <table class="w-full text-sm">
-    <thead class="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-left">
-      <tr>
-        <th class="px-4 py-2 font-medium">Status</th>
-        <th class="px-4 py-2 font-medium">Alert</th>
-        <th class="px-4 py-2 font-medium">Labels</th>
-        <th class="px-4 py-2 font-medium">Starts at</th>
-        <th class="px-4 py-2 font-medium">Last seen</th>
-      </tr>
-    </thead>
-    <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
-      {{range .Alerts}}
-      <tr>
-        <td class="px-4 py-2">
-          {{if eq .Status "firing"}}
-            <span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300">firing</span>
-          {{else}}
-            <span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">resolved</span>
+      <div>
+        <div class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5">Status</div>
+        <div class="flex flex-col gap-1 text-sm">
+          <label class="flex items-center gap-2">
+            <input type="radio" name="status" value="" {{if eq .StatusFilter ""}}checked{{end}} onchange="this.form.submit()"> All
+          </label>
+          <label class="flex items-center gap-2">
+            <input type="radio" name="status" value="firing" {{if eq .StatusFilter "firing"}}checked{{end}} onchange="this.form.submit()"> Firing
+          </label>
+          <label class="flex items-center gap-2">
+            <input type="radio" name="status" value="resolved" {{if eq .StatusFilter "resolved"}}checked{{end}} onchange="this.form.submit()"> Resolved
+          </label>
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5" for="alertname">Alert name</label>
+        <select id="alertname" name="alertname" onchange="this.form.submit()"
+          class="w-full px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-sm">
+          <option value="">All alert names</option>
+          {{$selected := .AlertnameFilter}}
+          {{range .AlertNames}}
+          <option value="{{.}}" {{if eq . $selected}}selected{{end}}>{{.}}</option>
           {{end}}
-        </td>
-        <td class="px-4 py-2 font-medium">{{.Alertname}}</td>
-        <td class="px-4 py-2 text-slate-500 dark:text-slate-400">
-          {{range $k, $v := .Labels}}<span class="inline-block mr-2">{{$k}}={{$v}}</span>{{end}}
-        </td>
-        <td class="px-4 py-2 text-slate-500 dark:text-slate-400">{{.StartsAt.Format "2006-01-02 15:04:05"}}</td>
-        <td class="px-4 py-2 text-slate-500 dark:text-slate-400">{{.LastSeen.Format "2006-01-02 15:04:05"}}</td>
-      </tr>
+        </select>
+      </div>
+
+      <div>
+        <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5" for="q">Search</label>
+        <input id="q" type="search" name="q" value="{{.Search}}" placeholder="e.g. a site or label value"
+          class="w-full px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-sm">
+        <p class="mt-1 text-xs text-slate-400 dark:text-slate-600">Matches alert name, labels and annotations.</p>
+      </div>
+
+      <div class="flex gap-2 pt-1">
+        <button type="submit" class="flex-1 px-3 py-1.5 rounded-md bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 text-sm font-medium hover:bg-slate-700 dark:hover:bg-slate-300">Apply</button>
+        <a href="/ui/" class="flex-1 text-center px-3 py-1.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-sm hover:bg-slate-200 dark:hover:bg-slate-700">Reset</a>
+      </div>
+    </form>
+  </aside>
+
+  <div class="flex-1 min-w-0 w-full">
+    <div class="mb-6 bg-white dark:bg-slate-900 rounded-lg shadow-sm border border-slate-200 dark:border-slate-800 p-4">
+      <div class="flex items-baseline justify-between mb-3">
+        <h2 class="text-sm font-medium text-slate-600 dark:text-slate-300">Alerts fired, last {{.HistoryDays}} day(s)</h2>
+        <div class="text-sm text-slate-500 dark:text-slate-400">Today: <span class="font-semibold text-slate-900 dark:text-slate-100">{{.TodayCount}}</span></div>
+      </div>
+      {{if .History}}
+      <div class="flex items-end gap-0.5 h-24">
+        {{range .History}}
+        <div class="flex-1 group relative flex items-end h-full" title="{{.Label}}: {{.Count}}">
+          <div class="w-full rounded-sm {{if .Today}}bg-slate-900 dark:bg-white{{else}}bg-slate-300 dark:bg-slate-700{{end}}" style="height: {{.HeightPct}}%; min-height: 1px;"></div>
+        </div>
+        {{end}}
+      </div>
+      <div class="flex justify-between mt-1 text-xs text-slate-400 dark:text-slate-600">
+        <span>{{.HistoryFirstLabel}}</span>
+        <span>{{.HistoryLastLabel}}</span>
+      </div>
       {{else}}
-      <tr><td colspan="5" class="px-4 py-8 text-center text-slate-400 dark:text-slate-600">No alerts.</td></tr>
+      <div class="text-sm text-slate-400 dark:text-slate-600 py-6 text-center">No alert history yet.</div>
       {{end}}
-    </tbody>
-  </table>
+    </div>
+
+    <div class="mb-2 text-sm text-slate-500 dark:text-slate-400">{{.Total}} alert(s) matched</div>
+
+    <div class="bg-white dark:bg-slate-900 rounded-lg shadow-sm border border-slate-200 dark:border-slate-800 overflow-hidden">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-left">
+          <tr>
+            <th class="px-4 py-2 font-medium">Status</th>
+            <th class="px-4 py-2 font-medium">Alert</th>
+            <th class="px-4 py-2 font-medium">Labels</th>
+            <th class="px-4 py-2 font-medium">Starts at</th>
+            <th class="px-4 py-2 font-medium">Last seen</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+          {{range .Alerts}}
+          <tr>
+            <td class="px-4 py-2">
+              {{if eq .Status "firing"}}
+                <span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300">firing</span>
+              {{else}}
+                <span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">resolved</span>
+              {{end}}
+            </td>
+            <td class="px-4 py-2 font-medium">{{.Alertname}}</td>
+            <td class="px-4 py-2 text-slate-500 dark:text-slate-400">
+              {{range $k, $v := .Labels}}<span class="inline-block mr-2">{{$k}}={{$v}}</span>{{end}}
+            </td>
+            <td class="px-4 py-2 text-slate-500 dark:text-slate-400">{{.StartsAt.Format "2006-01-02 15:04:05"}}</td>
+            <td class="px-4 py-2 text-slate-500 dark:text-slate-400">{{.LastSeen.Format "2006-01-02 15:04:05"}}</td>
+          </tr>
+          {{else}}
+          <tr><td colspan="5" class="px-4 py-8 text-center text-slate-400 dark:text-slate-600">No alerts match these filters.</td></tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+
+    {{if gt .TotalPages 1}}
+    <div class="mt-4 flex items-center justify-between text-sm text-slate-500 dark:text-slate-400">
+      <span>Page {{.Page}} of {{.TotalPages}}</span>
+      <div class="flex gap-2">
+        {{if .HasPrev}}
+        <a href="/ui/?page={{.PrevPage}}{{template "filterQS" .}}" class="px-3 py-1 rounded-md bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300">Previous</a>
+        {{else}}
+        <span class="px-3 py-1 rounded-md bg-slate-100 dark:bg-slate-900 text-slate-300 dark:text-slate-700">Previous</span>
+        {{end}}
+        {{if .HasNext}}
+        <a href="/ui/?page={{.NextPage}}{{template "filterQS" .}}" class="px-3 py-1 rounded-md bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300">Next</a>
+        {{else}}
+        <span class="px-3 py-1 rounded-md bg-slate-100 dark:bg-slate-900 text-slate-300 dark:text-slate-700">Next</span>
+        {{end}}
+      </div>
+    </div>
+    {{end}}
+  </div>
 </div>
 {{end}}

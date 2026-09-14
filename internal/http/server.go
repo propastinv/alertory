@@ -41,9 +41,10 @@ func healthzHandler(pool *pgxpool.Pool) http.Handler {
 // path - e.g. an internal-only Ingress for /ui vs. a public one for
 // /api/v1/alerts.
 //
-// If authSvc is nil (OIDC isn't configured), the web UI fails closed: it
-// serves 503 instead of silently running without auth, since this UI is
-// meant to be reachable from the public internet.
+// If authSvc is nil, the web UI either fails closed (503, the default when
+// OIDC just isn't configured) or - only when DISABLE_AUTH=true - runs fully
+// unauthenticated via auth.DevBypass. The latter is for local development
+// only: never set DISABLE_AUTH on a deployment reachable by anyone else.
 func NewServer(pool *pgxpool.Pool, rules *workflows.RuleStore, authSvc *auth.Service) http.Handler {
 	mux := http.NewServeMux()
 
@@ -51,12 +52,29 @@ func NewServer(pool *pgxpool.Pool, rules *workflows.RuleStore, authSvc *auth.Ser
 	mux.Handle("/api/v1/alerts", AlertsHandler(pool, rules, token))
 	mux.Handle("/healthz", healthzHandler(pool))
 
-	if authSvc == nil {
+	authDisabled := os.Getenv("DISABLE_AUTH") == "true"
+
+	if authSvc == nil && !authDisabled {
 		log.Println("WARNING: OIDC_ISSUER_URL/OIDC_CLIENT_ID/OIDC_CLIENT_SECRET not fully set - web UI is disabled (503) until SSO is configured")
 		mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "web UI is disabled: SSO is not configured", http.StatusServiceUnavailable)
 		}))
 		return securityHeaders(mux)
+	}
+
+	if authDisabled {
+		log.Println("WARNING: DISABLE_AUTH=true - web UI is serving every /ui/ route without authentication")
+	}
+
+	// wrap gates a UI handler behind a real session when SSO is configured,
+	// or behind the fixed dev session when it's intentionally disabled -
+	// everything downstream (currentUser, CheckCSRF, ...) works unchanged
+	// either way since both paths populate the same session context.
+	wrap := func(h http.Handler) http.Handler {
+		if authSvc == nil {
+			return auth.DevBypass(h)
+		}
+		return auth.RequireAuth(pool, h)
 	}
 
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -67,32 +85,40 @@ func NewServer(pool *pgxpool.Pool, rules *workflows.RuleStore, authSvc *auth.Ser
 		http.Redirect(w, r, "/ui/", http.StatusFound)
 	}))
 
-	mux.Handle("/ui/auth/login", authSvc.LoginHandler())
-	mux.Handle("/ui/auth/callback", authSvc.CallbackHandler(pool))
-	mux.Handle("/ui/auth/logout", authSvc.LogoutHandler(pool))
+	if authSvc != nil {
+		mux.Handle("/ui/auth/login", authSvc.LoginHandler())
+		mux.Handle("/ui/auth/callback", authSvc.CallbackHandler(pool))
+		mux.Handle("/ui/auth/logout", authSvc.LogoutHandler(pool))
+	} else {
+		// There's no real session to end, but base.html always renders a
+		// "Log out" link - give it somewhere to go instead of a 404.
+		mux.Handle("/ui/auth/logout", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/ui/", http.StatusFound)
+		}))
+	}
 
-	mux.Handle("/ui/providers/oauth2/slack/authorize", auth.RequireAuth(pool, SlackAuthorizeHandler()))
-	mux.Handle("/ui/providers/oauth2/slack", auth.RequireAuth(pool, SlackOAuthCallback(pool)))
+	mux.Handle("/ui/providers/oauth2/slack/authorize", wrap(SlackAuthorizeHandler()))
+	mux.Handle("/ui/providers/oauth2/slack", wrap(SlackOAuthCallback(pool)))
 
 	tmpl, err := loadTemplates()
 	if err != nil {
 		log.Fatalf("failed to load web UI templates: %v", err)
 	}
 
-	mux.Handle("GET /ui/{$}", auth.RequireAuth(pool, dashboardHandler(pool, tmpl.dashboard)))
+	mux.Handle("GET /ui/{$}", wrap(dashboardHandler(pool, tmpl.dashboard)))
 
-	mux.Handle("GET /ui/rules", auth.RequireAuth(pool, rulesListHandler(pool, tmpl.rulesList)))
-	mux.Handle("GET /ui/rules/new", auth.RequireAuth(pool, newRuleFormHandler(tmpl.ruleForm)))
-	mux.Handle("GET /ui/rules/{id}/edit", auth.RequireAuth(pool, editRuleFormHandler(pool, tmpl.ruleForm)))
-	mux.Handle("POST /ui/rules", auth.RequireAuth(pool, saveRuleHandler(pool)))
-	mux.Handle("POST /ui/rules/{id}", auth.RequireAuth(pool, saveRuleHandler(pool)))
-	mux.Handle("POST /ui/rules/{id}/delete", auth.RequireAuth(pool, deleteRuleHandler(pool)))
+	mux.Handle("GET /ui/rules", wrap(rulesListHandler(pool, tmpl.rulesList)))
+	mux.Handle("GET /ui/rules/new", wrap(newRuleFormHandler(tmpl.ruleForm)))
+	mux.Handle("GET /ui/rules/{id}/edit", wrap(editRuleFormHandler(pool, tmpl.ruleForm)))
+	mux.Handle("POST /ui/rules", wrap(saveRuleHandler(pool)))
+	mux.Handle("POST /ui/rules/{id}", wrap(saveRuleHandler(pool)))
+	mux.Handle("POST /ui/rules/{id}/delete", wrap(deleteRuleHandler(pool)))
 
-	mux.Handle("GET /ui/settings", auth.RequireAuth(pool, settingsHandler(pool, tmpl.settings)))
+	mux.Handle("GET /ui/settings", wrap(settingsHandler(pool, tmpl.settings)))
 
-	mux.Handle("GET /ui/api-keys", auth.RequireAuth(pool, apiKeysListHandler(pool, tmpl.apiKeys)))
-	mux.Handle("POST /ui/api-keys", auth.RequireAuth(pool, createAPIKeyHandler(pool, tmpl.apiKeys)))
-	mux.Handle("POST /ui/api-keys/{id}/delete", auth.RequireAuth(pool, deleteAPIKeyHandler(pool)))
+	mux.Handle("GET /ui/api-keys", wrap(apiKeysListHandler(pool, tmpl.apiKeys)))
+	mux.Handle("POST /ui/api-keys", wrap(createAPIKeyHandler(pool, tmpl.apiKeys)))
+	mux.Handle("POST /ui/api-keys/{id}/delete", wrap(deleteAPIKeyHandler(pool)))
 
 	return securityHeaders(mux)
 }

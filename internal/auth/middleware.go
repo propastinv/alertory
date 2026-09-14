@@ -61,6 +61,30 @@ func FromContext(ctx context.Context) (*Session, bool) {
 	return sess, ok
 }
 
+// devCSRFToken is fixed rather than random since DevBypass sessions aren't
+// protecting anything - auth is off entirely - and a stable value avoids
+// generating one per request while still letting CheckCSRF work unchanged
+// for POST handlers.
+const devCSRFToken = "dev-auth-disabled"
+
+// DevBypass skips session/cookie validation entirely and attaches a fixed,
+// unauthenticated dev Session to every request, so handlers written against
+// RequireAuth (currentUser, CheckCSRF, ...) keep working unchanged. Only
+// wired up when DISABLE_AUTH=true - see internal/http.NewServer - which is
+// for local development only; never enable it on a deployment reachable by
+// anyone else.
+func DevBypass(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), sessionContextKey, &Session{
+			Subject:   "dev",
+			Email:     "dev@localhost",
+			Name:      "Dev (auth disabled)",
+			CSRFToken: devCSRFToken,
+		})
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 // CheckCSRF validates a submitted csrf_token form value against the
 // current session's token. Call after r.ParseForm(). Every state-changing
 // (POST) handler behind RequireAuth must call this, since a session

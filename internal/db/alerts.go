@@ -114,38 +114,118 @@ type ActiveAlertRow struct {
 	LastSeen    time.Time
 }
 
-// ListActiveAlerts powers the web UI dashboard. statusFilter == "" means
-// no filter.
-func ListActiveAlerts(ctx context.Context, pool *pgxpool.Pool, statusFilter string, limit int) ([]ActiveAlertRow, error) {
+// ActiveAlertFilter narrows ListActiveAlerts. The zero value ("", "", "")
+// means "no filter" - every field is optional and additive (AND).
+type ActiveAlertFilter struct {
+	Status    string
+	Alertname string // exact match, e.g. from the dashboard's alert-name selector
+	// Search matches loosely against alertname, labels and annotations
+	// (as text) so free-form terms like a site/host name that only shows
+	// up in a label value still find the alert, not just an alertname
+	// substring match.
+	Search string
+}
+
+// ListActiveAlerts powers the web UI dashboard. Returns the page of rows
+// plus the total row count matching the filter (pre-pagination), via a
+// COUNT(*) OVER() window so it's one round trip instead of two.
+func ListActiveAlerts(ctx context.Context, pool *pgxpool.Pool, f ActiveAlertFilter, limit, offset int) ([]ActiveAlertRow, int, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
+	if offset < 0 {
+		offset = 0
+	}
 
 	query := `
-		SELECT fingerprint, alertname, status, labels, starts_at, last_seen
+		SELECT fingerprint, alertname, status, labels, starts_at, last_seen,
+		       count(*) OVER()
 		FROM active_alerts
 		WHERE ($1 = '' OR status = $1)
+		  AND ($2 = '' OR alertname = $2)
+		  AND ($3 = '' OR alertname ILIKE '%' || $3 || '%'
+		            OR labels::text ILIKE '%' || $3 || '%'
+		            OR annotations::text ILIKE '%' || $3 || '%')
 		ORDER BY last_seen DESC
-		LIMIT $2
+		LIMIT $4 OFFSET $5
 	`
 
-	rows, err := pool.Query(ctx, query, statusFilter, limit)
+	rows, err := pool.Query(ctx, query, f.Status, f.Alertname, f.Search, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 
 	var out []ActiveAlertRow
+	var total int
 	for rows.Next() {
 		var r ActiveAlertRow
 		var labelsJSON *string
-		if err := rows.Scan(&r.Fingerprint, &r.Alertname, &r.Status, &labelsJSON, &r.StartsAt, &r.LastSeen); err != nil {
-			return nil, err
+		if err := rows.Scan(&r.Fingerprint, &r.Alertname, &r.Status, &labelsJSON, &r.StartsAt, &r.LastSeen, &total); err != nil {
+			return nil, 0, err
 		}
 		if labelsJSON != nil {
 			_ = json.Unmarshal([]byte(*labelsJSON), &r.Labels)
 		}
 		out = append(out, r)
+	}
+	return out, total, rows.Err()
+}
+
+// ListDistinctAlertnames backs the dashboard's alert-name filter selector.
+func ListDistinctAlertnames(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
+	rows, err := pool.Query(ctx, `SELECT DISTINCT alertname FROM active_alerts ORDER BY alertname`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		out = append(out, name)
+	}
+	return out, rows.Err()
+}
+
+// DailyAlertCount is one point of the dashboard's alert history graph.
+type DailyAlertCount struct {
+	Day   time.Time
+	Count int64
+}
+
+// CountFiringEventsByDay returns one row per day for the last `days` days
+// (including today), with the count of alert_events that fired that day -
+// zero-filled via generate_series so a quiet day still renders as a bar
+// instead of a gap.
+func CountFiringEventsByDay(ctx context.Context, pool *pgxpool.Pool, days int) ([]DailyAlertCount, error) {
+	if days <= 0 {
+		days = 7
+	}
+
+	rows, err := pool.Query(ctx, `
+		SELECT d::date, COALESCE(count(e.id), 0)
+		FROM generate_series(CURRENT_DATE - ($1::int - 1), CURRENT_DATE, interval '1 day') AS d
+		LEFT JOIN alert_events e
+		  ON e.received_at::date = d::date AND e.status = 'firing'
+		GROUP BY d
+		ORDER BY d
+	`, days)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []DailyAlertCount
+	for rows.Next() {
+		var c DailyAlertCount
+		if err := rows.Scan(&c.Day, &c.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
 	}
 	return out, rows.Err()
 }

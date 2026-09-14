@@ -79,7 +79,17 @@ func main() {
 // outright: since SSO was explicitly requested, silently falling back to
 // "UI disabled" would hide a real misconfiguration, and a hard failure is
 // easier to notice and gets retried by whatever supervises this process.
+//
+// DISABLE_AUTH=true skips all of the above and returns nil outright, no
+// OIDC/APP_URL vars required. NewServer treats that case differently from
+// "misconfigured" - it serves the UI unauthenticated (via auth.DevBypass)
+// instead of 503ing - which is only meant for local development.
 func mustBuildAuthService(ctx context.Context) *auth.Service {
+	if os.Getenv("DISABLE_AUTH") == "true" {
+		log.Println("WARNING: DISABLE_AUTH=true - web UI auth is disabled, do not use this outside local development")
+		return nil
+	}
+
 	issuerURL := os.Getenv("OIDC_ISSUER_URL")
 	clientID := os.Getenv("OIDC_CLIENT_ID")
 	clientSecret := os.Getenv("OIDC_CLIENT_SECRET")
