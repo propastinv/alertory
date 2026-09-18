@@ -96,18 +96,6 @@ type GroupInfo struct {
 	NotificationOnly bool
 }
 
-func (g AlertGroup) AllResolved() bool {
-	if len(g.Members) == 0 {
-		return true
-	}
-	for _, m := range g.Members {
-		if m.Status != "resolved" {
-			return false
-		}
-	}
-	return true
-}
-
 // UpsertGroupMember records an alert's current state inside its group and
 // (re)arms the debounce timer: flush_after moves out by `debounce` on every
 // new event, but never past first_event_at + maxWindow, so a continuous
@@ -218,16 +206,20 @@ func ClaimDueGroups(ctx context.Context, pool *pgxpool.Pool, limit int, lease ti
 }
 
 // SaveGroupProgress persists each member's updated notification state
-// after a successful flush pass. If every member is resolved and its
-// message already reflects that, the group's job is done and the row is
-// removed; otherwise it's saved clean (dirty=false) until something
-// changes again.
-func SaveGroupProgress(ctx context.Context, pool *pgxpool.Pool, groupKey string, members map[string]GroupMember, done bool) error {
-	if done {
-		_, err := pool.Exec(ctx, `DELETE FROM alert_groups WHERE group_key = $1`, groupKey)
-		return err
-	}
-
+// after a successful flush pass, and always keeps the row - even once
+// every member is resolved and its message already reflects that. It
+// used to delete the row as soon as it was fully resolved+notified, but
+// group_key is deterministic (rule+channel+group-by labels, not tied to
+// a specific incident), so a repeated resolved webhook for the same
+// alert - Alertmanager retries, HA replicas, or just a slow network -
+// would find no row, INSERT a brand-new one with no notified-state to
+// compare against, and get treated as never-sent: a duplicate "RESOLVED"
+// Slack message per repeat. Leaving the row in place means a repeat
+// event lands on UPDATE instead, sees NotifiedStatus already matching,
+// and produces no Slack call at all. CleanupResolvedGroups reaps these
+// once they've been quiet long enough that a repeat is no longer
+// expected.
+func SaveGroupProgress(ctx context.Context, pool *pgxpool.Pool, groupKey string, members map[string]GroupMember) error {
 	membersJSON, err := json.Marshal(members)
 	if err != nil {
 		return err
@@ -284,8 +276,18 @@ func CleanupResolvedGroups(ctx context.Context, pool *pgxpool.Pool, olderThan ti
 }
 
 // CountOpenAlertGroups is used by the web UI dashboard.
+// CountOpenAlertGroups only counts groups with at least one member still
+// firing - a fully-resolved group is kept around for a while (see
+// SaveGroupProgress) purely to catch repeat webhooks, not because
+// there's anything still "in flight".
 func CountOpenAlertGroups(ctx context.Context, pool *pgxpool.Pool) (int, error) {
 	var n int
-	err := pool.QueryRow(ctx, `SELECT count(*) FROM alert_groups`).Scan(&n)
+	err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM alert_groups
+		WHERE EXISTS (
+		  SELECT 1 FROM jsonb_each(members) m
+		  WHERE m.value ->> 'status' <> 'resolved'
+		)
+	`).Scan(&n)
 	return n, err
 }

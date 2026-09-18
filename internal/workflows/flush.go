@@ -148,17 +148,7 @@ func processGroup(ctx context.Context, pool *pgxpool.Pool, token string, g db.Al
 		return
 	}
 
-	done := g.AllResolved() && allNotifiedCurrent(g.Members)
-	if err := db.SaveGroupProgress(ctx, pool, g.GroupKey, g.Members, done); err != nil {
+	if err := db.SaveGroupProgress(ctx, pool, g.GroupKey, g.Members); err != nil {
 		log.Printf("flush worker: failed to save progress for group %s: %v", g.GroupKey, err)
 	}
-}
-
-func allNotifiedCurrent(members map[string]db.GroupMember) bool {
-	for _, m := range members {
-		if len(m.NotifiedTargets) == 0 || m.NotifiedStatus != m.Status {
-			return false
-		}
-	}
-	return true
 }
