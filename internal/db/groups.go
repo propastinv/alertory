@@ -26,9 +26,19 @@ type MemberField struct {
 // channel/person; each channel gets and maintains its own message
 // independently, which is why a member tracks one of these per channel
 // rather than a single channel/ts pair.
+//
+// Channel is the rule's own configured ID (e.g. "U0123456") and is what
+// later flushes match against to find "is this channel already sent?" -
+// it must stay exactly what the rule says, never what Slack's API
+// returns, because for a DM target chat.postMessage's response reports
+// the resolved DM channel ("D...") instead of the user ID you gave it.
+// APIChannel carries that resolved ID when it differs, since chat.update
+// needs the actual channel the message lives in, not the user ID. It's
+// empty for a real channel target, where Slack echoes the same ID back.
 type NotifiedTarget struct {
-	Channel string `json:"channel"`
-	TS      string `json:"ts"`
+	Channel    string `json:"channel"`
+	APIChannel string `json:"api_channel,omitempty"`
+	TS         string `json:"ts"`
 }
 
 // GroupMember is the state of a single alert inside an alert_groups row.

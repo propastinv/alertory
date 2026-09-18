@@ -96,20 +96,24 @@ func processGroup(ctx context.Context, pool *pgxpool.Pool, token string, g db.Al
 
 		text, attachments := RenderBucketMessage(style, b.members)
 
-		existingByChannel := make(map[string]string, len(b.targets))
+		existingByChannel := make(map[string]db.NotifiedTarget, len(b.targets))
 		for _, t := range b.targets {
-			existingByChannel[t.Channel] = t.TS
+			existingByChannel[t.Channel] = t
 		}
 
 		newTargets := make([]db.NotifiedTarget, 0, len(channels))
 		var bucketErr error
 		for _, ch := range channels {
-			if ts, ok := existingByChannel[ch]; ok {
-				if err := slack.Update(token, ch, ts, text, attachments); err != nil {
-					log.Printf("flush worker: failed to update group %s (bucket of %d, ts=%s) on %s: %v", g.GroupKey, len(b.members), ts, ch, err)
+			if t, ok := existingByChannel[ch]; ok {
+				apiChannel := t.APIChannel
+				if apiChannel == "" {
+					apiChannel = t.Channel
+				}
+				if err := slack.Update(token, apiChannel, t.TS, text, attachments); err != nil {
+					log.Printf("flush worker: failed to update group %s (bucket of %d, ts=%s) on %s: %v", g.GroupKey, len(b.members), t.TS, ch, err)
 					bucketErr = err
 				}
-				newTargets = append(newTargets, db.NotifiedTarget{Channel: ch, TS: ts})
+				newTargets = append(newTargets, db.NotifiedTarget{Channel: ch, APIChannel: t.APIChannel, TS: t.TS})
 				continue
 			}
 
@@ -119,7 +123,11 @@ func processGroup(ctx context.Context, pool *pgxpool.Pool, token string, g db.Al
 				bucketErr = err
 				continue
 			}
-			newTargets = append(newTargets, db.NotifiedTarget{Channel: res.Channel, TS: res.TS})
+			target := db.NotifiedTarget{Channel: ch, TS: res.TS}
+			if res.Channel != ch {
+				target.APIChannel = res.Channel
+			}
+			newTargets = append(newTargets, target)
 		}
 
 		if bucketErr != nil {
